@@ -181,6 +181,15 @@ qjsb::ClassDef<Vec2>(ctx, "Vec2")
 //   var u = v.add(w);
 ```
 
+```cpp
+// Export class constructor from a module instead of global:
+auto geom = ctx.newModule("geom");
+qjsb::ClassDef<Vec2>(ctx, "Vec2")
+    .constructor<double, double>()
+    .property("length", &Vec2::length)
+    .endClass(geom);                 // export { Vec2 } from "geom"
+```
+
 ### Ownership semantics
 
 ```cpp
@@ -330,9 +339,3 @@ cmake -B build -DQUICKJS_INCLUDE_DIRS=/path/to/include \
 ## License
 
 MIT
-// Export class constructor from a module instead of global:
-auto geom = ctx.newModule("geom");
-qjsb::ClassDef<Vec2>(ctx, "Vec2")
-    .constructor<double, double>()
-    .property("length", &Vec2::length)
-    .endClass(geom);                 // export { Vec2 } from "geom"
