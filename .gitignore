@@ -1,0 +1,22 @@
+# CMake build outputs
+build/
+build_*/
+CMakeFiles/
+cmake_install.cmake
+CMakeCache.txt
+CTestTestfile.cmake
+Makefile
+*.o
+*.a
+*.so
+*.dylib
+
+# Compiled test/example binaries
+tests/test_*
+examples/example_*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
