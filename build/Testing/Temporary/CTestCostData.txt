@@ -1,0 +1,5 @@
+test_core 2 0.00153086
+test_convert 2 0.00184312
+test_function 1 0.00344763
+test_class 1 0.00301271
+---
