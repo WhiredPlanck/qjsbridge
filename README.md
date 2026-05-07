@@ -10,6 +10,8 @@ A lightweight, header-only C++17 binding library that bridges
   and ownership semantics
 - **Automatic type conversion** via `Converter<T>` specialisations
 - **Function binding** – free functions, lambdas, capturing closures
+- **Module binding** – export C++ functions/classes as ES modules and import via
+  `import { ... } from "module"`
 - **Class binding** – constructors, member methods, data fields, static
   methods, read-only properties, custom getter/setter pairs
 - **Ownership models** – owned (`T*`), borrowed (`const T*`), and
@@ -78,6 +80,18 @@ int main() {
         print("1 + 2 = " + add(1, 2));
     )");
 }
+```
+
+### Module export / import
+
+```cpp
+auto mod = ctx.newModule("math_ext");
+mod.bindFunction("add", [](int a, int b) { return a + b; });
+
+ctx.evalModule(R"(
+  import { add } from "math_ext";
+  globalThis.result = add(20, 22);
+)", "entry.mjs");
 ```
 
 ---
@@ -155,7 +169,7 @@ qjsb::ClassDef<Vec2>(ctx, "Vec2")
     .constructor<double, double>()   // new Vec2(x, y)
     .field("x", &Vec2::x)            // direct field access (get + set)
     .field("y", &Vec2::y)
-    .readonlyProp("length", &Vec2::length)  // getter only
+    .property("length", &Vec2::length)      // getter-only overload
     .method("add",  &Vec2::add)
     .staticMethod("zero", Vec2::zero)
     .endClass();                     // registers Vec2 as a global
@@ -215,6 +229,7 @@ RAII owner of `JSRuntime`. Constructor throws `qjsb::Exception` on failure.
 | `setMemoryLimit(n)` | Limit JS heap size                  |
 | `setMaxStackSize(n)`| Limit JS stack                      |
 | `runGC()`           | Trigger garbage collection          |
+| `setModuleLoader(normalize, loader, opaque)` | Install custom QuickJS module loader |
 
 ### `qjsb::Context`
 RAII owner of `JSContext`.
@@ -227,6 +242,8 @@ RAII owner of `JSContext`.
 | `getGlobal(name)` / `setGlobal(name, v)` | Access global variables          |
 | `newObject()` / `newArray()`       | Create JS objects/arrays                 |
 | `bindFunction(name, fn, length?)`  | Bind a C++ callable as a global function |
+| `newModule(name)`                  | Create a C module for ES `import` exports |
+| `evalModule(code, filename?)`      | Evaluate module code (`JS_EVAL_TYPE_MODULE`) |
 | `get()`                            | Raw `JSContext*`                         |
 
 ### `qjsb::Value`
@@ -251,11 +268,20 @@ Owning RAII wrapper for `JSValue`.
 | `constructor<Args...>()`            | Register constructor with given argument types |
 | `method(name, fn)`                  | Instance method (member ptr or free fn)   |
 | `field(name, member_ptr)`           | Direct field with auto getter+setter      |
-| `readonlyProp(name, fn)`            | Read-only property (getter only)          |
-| `property(name, getter, setter)`    | Property with explicit getter+setter      |
+| `property(name, getter)`            | Getter-only property                       |
+| `property(name, getter, setter)`    | Read-write property                        |
 | `staticMethod(name, fn)`            | Static method on the constructor          |
 | `endClass(global_name?)`            | Publish constructor as global variable    |
+| `endClass(module, export_name?)`    | Export constructor from a module          |
 | `constructorValue()`                | Returns constructor `Value` for manual placement |
+
+### `qjsb::Module`
+
+| Method                                 | Description                              |
+|----------------------------------------|------------------------------------------|
+| `bindFunction(name, fn, length?)`      | Export callable from module              |
+| `exportValue(name, value)`             | Export existing JS value                 |
+| `get()`                                | Raw `JSModuleDef*`                       |
 
 ### Free helpers
 
@@ -304,3 +330,9 @@ cmake -B build -DQUICKJS_INCLUDE_DIRS=/path/to/include \
 ## License
 
 MIT
+// Export class constructor from a module instead of global:
+auto geom = ctx.newModule("geom");
+qjsb::ClassDef<Vec2>(ctx, "Vec2")
+    .constructor<double, double>()
+    .property("length", &Vec2::length)
+    .endClass(geom);                 // export { Vec2 } from "geom"

@@ -409,38 +409,19 @@ public:
         return *this;
     }
 
-    // ── Read-only property (getter only) ──────────────────────────────────────
+    // ── Property overloads ─────────────────────────────────────────────────────
+    // property(name, getter)                    -> read-only
+    // property(name, getter, setter)            -> read-write
 
-    // Member function pointer getter.
-    template <typename MFn,
-              std::enable_if_t<std::is_member_function_pointer_v<MFn>, int> = 0>
-    ClassDef& readonlyProp(const char* name, MFn fn) {
-        auto* cb = new detail::MethodCallable<T, MFn>(fn);
-        JSValue gf = make_fn_(cb, 0);
+    template <typename Getter>
+    ClassDef& property(const char* name, Getter&& getter) {
+        JSValue gf = make_getter_fn_(std::forward<Getter>(getter));
         JSAtom  at = JS_NewAtom(ctx_, name);
         JS_DefinePropertyGetSet(ctx_, proto_, at, gf, JS_UNDEFINED,
                                 JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(ctx_, at);
         return *this;
     }
-
-    // Lambda / free-function getter (first arg = T*).
-    template <typename Fn,
-              std::enable_if_t<
-                  !std::is_member_function_pointer_v<std::decay_t<Fn>>,
-                  int> = 0>
-    ClassDef& readonlyProp(const char* name, Fn&& fn) {
-        auto* cb = new detail::MethodCallable<T, std::decay_t<Fn>>(
-            std::forward<Fn>(fn));
-        JSValue gf = make_fn_(cb, 0);
-        JSAtom  at = JS_NewAtom(ctx_, name);
-        JS_DefinePropertyGetSet(ctx_, proto_, at, gf, JS_UNDEFINED,
-                                JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-        JS_FreeAtom(ctx_, at);
-        return *this;
-    }
-
-    // ── Property with explicit getter + setter ────────────────────────────────
 
     template <typename Getter, typename Setter>
     ClassDef& property(const char* name, Getter&& getter, Setter&& setter) {
@@ -451,6 +432,12 @@ public:
                                 JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(ctx_, at);
         return *this;
+    }
+
+    // Backward-compatible alias.
+    template <typename Getter>
+    ClassDef& readonlyProp(const char* name, Getter&& getter) {
+        return property(name, std::forward<Getter>(getter));
     }
 
     // ── Static methods ────────────────────────────────────────────────────────
@@ -464,32 +451,11 @@ public:
         return *this;
     }
 
-    // ── Finalise and register in the global scope ─────────────────────────────
+    // ── Finalise and register in global/module scope ──────────────────────────
 
     /// Installs the constructor as a global variable.
-    /// Call at the end of the definition chain.
     ClassDef& endClass(const std::string& global_name = "") {
-        if (JS_IsUndefined(ctor_)) {
-            // No constructor defined: create a no-op constructor stub that
-            // produces a TypeError at `new` time.
-            detail::ensure_callable_class_(JS_GetRuntime(ctx_));
-
-            struct NoCtorCallable final : detail::CallableBase {
-                std::string name;
-                explicit NoCtorCallable(std::string n) : name(std::move(n)) {}
-                JSValue call(JSContext* ctx, JSValueConst, int, JSValueConst*) override {
-                    return JS_ThrowTypeError(ctx,
-                        "No constructor registered for class '%s'", name.c_str());
-                }
-            };
-            auto* cb = static_cast<detail::CallableBase*>(
-                new NoCtorCallable(name_));
-            JSValue wrapper = JS_NewObjectClass(ctx_,
-                static_cast<int>(detail::callable_class_id_()));
-            JS_SetOpaque(wrapper, cb);
-            ctor_ = JS_NewCFunctionData(ctx_, ctor_dispatch_, 0, 0, 1, &wrapper);
-            JS_FreeValue(ctx_, wrapper);
-        }
+        ensure_ctor_();
         JSValue g = JS_GetGlobalObject(ctx_);
         const std::string& gn = global_name.empty() ? name_ : global_name;
         JS_SetPropertyStr(ctx_, g, gn.c_str(), JS_DupValue(ctx_, ctor_));
@@ -497,10 +463,45 @@ public:
         return *this;
     }
 
+    /// Exports the constructor from a module so it can be imported from JS.
+    ClassDef& endClass(Module& module, const std::string& export_name = "") {
+        ensure_ctor_();
+        const std::string& en = export_name.empty() ? name_ : export_name;
+        module.exportValue(en, Value::dup(ctx_, ctor_));
+        return *this;
+    }
+
     /// Returns the constructor as a Value (for manual placement).
     Value constructorValue() const { return Value::dup(ctx_, ctor_); }
 
 private:
+    void ensure_ctor_() {
+        if (!JS_IsUndefined(ctor_))
+            return;
+        // No constructor defined: create a no-op constructor stub that
+        // produces a TypeError at `new` time.
+        detail::ensure_callable_class_(JS_GetRuntime(ctx_));
+
+        struct NoCtorCallable final : detail::CallableBase {
+            std::string name;
+            explicit NoCtorCallable(std::string n) : name(std::move(n)) {}
+            JSValue call(JSContext* ctx, JSValueConst, int, JSValueConst*) override {
+                return JS_ThrowTypeError(ctx,
+                    "No constructor registered for class '%s'", name.c_str());
+            }
+        };
+        auto* cb = static_cast<detail::CallableBase*>(
+            new NoCtorCallable(name_));
+        JSValue wrapper = JS_NewObjectClass(ctx_,
+            static_cast<int>(detail::callable_class_id_()));
+        JS_SetOpaque(wrapper, cb);
+        ctor_ = JS_NewCFunctionData(ctx_, ctor_dispatch_, 0, 0, 1, &wrapper);
+        JS_FreeValue(ctx_, wrapper);
+        JS_SetConstructorBit(ctx_, ctor_, true);
+        JS_SetPropertyStr(ctx_, ctor_, "prototype", JS_DupValue(ctx_, proto_));
+        JS_SetPropertyStr(ctx_, proto_, "constructor", JS_DupValue(ctx_, ctor_));
+    }
+
     // Constructor dispatcher (same pattern as callable_dispatch_ but acts as ctor).
     static JSValue ctor_dispatch_(JSContext* ctx,
                                    JSValueConst this_val,

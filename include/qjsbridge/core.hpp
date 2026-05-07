@@ -12,8 +12,13 @@
 #endif
 
 #include <cstdio>
+#include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace qjsb {
 
@@ -55,6 +60,39 @@ namespace detail {
         return JS_NewClassID(id);
     }
 #endif
+
+struct ModuleExport {
+    std::string name;
+    std::function<JSValue(JSContext*)> factory;
+};
+
+struct ModuleState {
+    JSContext* ctx{nullptr};
+    std::vector<ModuleExport> exports;
+    std::vector<JSValue> retained;
+};
+
+inline std::unordered_map<JSModuleDef*, std::shared_ptr<ModuleState>>& module_states() {
+    static std::unordered_map<JSModuleDef*, std::shared_ptr<ModuleState>> m;
+    return m;
+}
+
+inline int module_init_dispatch(JSContext* ctx, JSModuleDef* m) {
+    auto it = module_states().find(m);
+    if (it == module_states().end())
+        return -1;
+    const auto& state = it->second;
+    for (const auto& exp : state->exports) {
+        JSValue v = exp.factory(ctx);
+        if (JS_IsException(v))
+            return -1;
+        if (JS_SetModuleExport(ctx, m, exp.name.c_str(), v) < 0) {
+            JS_FreeValue(ctx, v);
+            return -1;
+        }
+    }
+    return 0;
+}
 } // namespace detail
 
 // ── Runtime ───────────────────────────────────────────────────────────────────
@@ -86,6 +124,11 @@ public:
     void setMemoryLimit(size_t limit) noexcept { JS_SetMemoryLimit(rt_, limit); }
     void setMaxStackSize(size_t size)  noexcept { JS_SetMaxStackSize(rt_, size); }
     void runGC() noexcept { JS_RunGC(rt_); }
+    void setModuleLoader(JSModuleNormalizeFunc* normalize,
+                         JSModuleLoaderFunc* loader,
+                         void* opaque = nullptr) noexcept {
+        JS_SetModuleLoaderFunc(rt_, normalize, loader, opaque);
+    }
 };
 
 // ── Value ─────────────────────────────────────────────────────────────────────
@@ -255,6 +298,8 @@ inline std::string extractExceptionMessage(JSContext* ctx) {
     throw JSException(detail::extractExceptionMessage(ctx));
 }
 
+class Module;
+
 // ── Context ───────────────────────────────────────────────────────────────────
 
 /// RAII owner of a JSContext.  Provides eval, global-variable access, and
@@ -296,6 +341,12 @@ public:
         return Value(ctx_, v);
     }
 
+    /// Evaluate JS module code; supports `import` / `export`.
+    Value evalModule(const std::string& code,
+                     const std::string& filename = "<module>") {
+        return eval(code, filename, JS_EVAL_TYPE_MODULE);
+    }
+
     /// Read and evaluate a file; throws on I/O or JS error.
     Value evalFile(const std::string& filename) {
         FILE* f = fopen(filename.c_str(), "rb");
@@ -334,7 +385,94 @@ public:
     template <typename Fn>
     void bindFunction(const std::string& name, Fn&& fn, int length = -1);
 
+    /// Create a C module object for exporting C++ bindings to JS modules.
+    Module newModule(const std::string& name);
+
     JSContext* operator->() const noexcept { return ctx_; }
 };
+
+/// Builder/holder for a QuickJS C module (`JS_NewCModule`).
+/// Use with Context::evalModule and JS `import { ... } from "name"`.
+class Module {
+    JSContext* ctx_{nullptr};
+    JSModuleDef* mod_{nullptr};
+    std::shared_ptr<detail::ModuleState> state_;
+
+    void cleanup_() noexcept {
+        if (!state_)
+            return;
+        for (JSValue v : state_->retained) {
+            JS_FreeValue(state_->ctx, v);
+        }
+        if (mod_) {
+            detail::module_states().erase(mod_);
+        }
+        state_.reset();
+        mod_ = nullptr;
+        ctx_ = nullptr;
+    }
+
+public:
+    Module() = default;
+
+    Module(JSContext* ctx, const std::string& name) : ctx_(ctx) {
+        state_ = std::make_shared<detail::ModuleState>();
+        state_->ctx = ctx;
+        mod_ = JS_NewCModule(ctx_, name.c_str(), detail::module_init_dispatch);
+        if (!mod_)
+            throw Exception("Failed to create module: " + name);
+        detail::module_states()[mod_] = state_;
+    }
+
+    explicit Module(Context& ctx, const std::string& name) : Module(ctx.get(), name) {}
+
+    ~Module() { cleanup_(); }
+
+    Module(const Module&) = delete;
+    Module& operator=(const Module&) = delete;
+    Module(Module&& o) noexcept
+        : ctx_(o.ctx_), mod_(o.mod_), state_(std::move(o.state_)) {
+        o.ctx_ = nullptr;
+        o.mod_ = nullptr;
+    }
+    Module& operator=(Module&& o) noexcept {
+        if (this != &o) {
+            cleanup_();
+            ctx_ = o.ctx_;
+            mod_ = o.mod_;
+            state_ = std::move(o.state_);
+            o.ctx_ = nullptr;
+            o.mod_ = nullptr;
+        }
+        return *this;
+    }
+
+    JSContext* context() const noexcept { return ctx_; }
+    JSModuleDef* get() const noexcept { return mod_; }
+
+    /// Add an already-created JS value as module export.
+    /// The value is retained until this Module is destroyed.
+    Module& exportValue(const std::string& name, Value v) {
+        if (!mod_) throw Exception("Invalid module");
+        if (JS_AddModuleExport(ctx_, mod_, name.c_str()) < 0)
+            throwJSException(ctx_);
+        JSValue retained = JS_DupValue(ctx_, v.get());
+        state_->retained.push_back(retained);
+        state_->exports.push_back(detail::ModuleExport{
+            name,
+            [retained](JSContext* ctx) {
+                return JS_DupValue(ctx, retained);
+            }
+        });
+        return *this;
+    }
+
+    template <typename Fn>
+    Module& bindFunction(const std::string& name, Fn&& fn, int length = -1);
+};
+
+inline Module Context::newModule(const std::string& name) {
+    return Module(ctx_, name);
+}
 
 } // namespace qjsb

@@ -164,6 +164,23 @@ static void test_multiple_bindings() {
     assert(n == 9);  // f3(f2(5)) = f3(10) = 9
 }
 
+static void test_module_function_binding() {
+    Runtime rt; Context ctx(rt);
+    auto module = ctx.newModule("math_ext");
+    module.bindFunction("add", [](int a, int b) { return a + b; });
+    module.bindFunction("mul", [](int a, int b) { return a * b; });
+
+    ctx.evalModule(R"(
+        import { add, mul } from "math_ext";
+        globalThis.moduleResult = mul(add(1, 2), 5);
+    )", "module_func_test.mjs");
+
+    Value v = ctx.eval("moduleResult");
+    int32_t n = 0;
+    JS_ToInt32(ctx.get(), &n, v.get());
+    assert(n == 15);
+}
+
 int main() {
     test_free_function();
     test_string_function();
@@ -177,5 +194,6 @@ int main() {
     test_exception_propagation();
     test_optional_arg();
     test_multiple_bindings();
+    test_module_function_binding();
     return 0;
 }

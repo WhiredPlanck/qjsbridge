@@ -100,7 +100,7 @@ static void test_counter_static() {
     assert(zn == 0);
 }
 
-// ── readonlyProp (member function getter) ────────────────────────────────────
+// ── property(name, getter) (read-only overload) ──────────────────────────────
 
 struct Circle {
     double radius;
@@ -109,14 +109,14 @@ struct Circle {
     double perimeter() const { return 2.0 * 3.14159265358979 * radius; }
 };
 
-static void test_readonly_property() {
+static void test_readonly_property_overload() {
     Runtime rt; Context ctx(rt);
 
     ClassDef<Circle>(ctx, "Circle")
         .constructor<double>()
         .field("radius",    &Circle::radius)
-        .readonlyProp("area",      &Circle::area)
-        .readonlyProp("perimeter", &Circle::perimeter)
+        .property("area",      &Circle::area)
+        .property("perimeter", &Circle::perimeter)
         .endClass();
 
     Value area = ctx.eval("new Circle(1).area");
@@ -228,7 +228,7 @@ static void test_property() {
         .constructor<double, double>()
         .field("h", &Rectangle::h)
         .property("w", &Rectangle::getW, &Rectangle::setW)
-        .readonlyProp("area", &Rectangle::getArea)
+        .property("area", &Rectangle::getArea)
         .endClass();
 
     ctx.eval("var r = new Rectangle(3, 4);");
@@ -268,15 +268,38 @@ static void test_multiple_classes() {
     assert(n == 10);
 }
 
+static void test_module_class_export() {
+    Runtime rt; Context ctx(rt);
+    auto module = ctx.newModule("geom");
+
+    ClassDef<Point>(ctx, "Point")
+        .constructor<double, double>()
+        .field("x", &Point::x)
+        .field("y", &Point::y)
+        .method("length", &Point::length)
+        .endClass(module);
+
+    Value v = ctx.evalModule(R"(
+        import { Point } from "geom";
+        globalThis.moduleLen = new Point(6, 8).length();
+    )", "module_test.mjs");
+    (void)v;
+
+    Value len = ctx.eval("moduleLen");
+    double d = 0; JS_ToFloat64(ctx.get(), &d, len.get());
+    assert(d == 100.0);
+}
+
 int main() {
     test_point_binding();
     test_counter_static();
-    test_readonly_property();
+    test_readonly_property_overload();
     test_lambda_method();
     test_push_owned();
     test_push_borrowed();
     test_shared_ptr();
     test_property();
     test_multiple_classes();
+    test_module_class_export();
     return 0;
 }
