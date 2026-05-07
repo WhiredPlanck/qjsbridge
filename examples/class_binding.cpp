@@ -41,7 +41,7 @@ int main() {
         .constructor<double, double>()
         .field("x", &Vec2::x)
         .field("y", &Vec2::y)
-        .readonlyProp("length", &Vec2::length)
+        .property("length", &Vec2::length)
         .method("add",      &Vec2::add)
         .method("scale",    &Vec2::scale)
         .method("toString", &Vec2::toString)

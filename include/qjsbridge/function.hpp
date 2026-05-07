@@ -185,4 +185,18 @@ inline void Context::bindFunction(const std::string& name, Fn&& fn, int length) 
     JS_FreeValue(ctx_, g);
 }
 
+template <typename Fn>
+inline Module& Module::bindFunction(const std::string& name, Fn&& fn, int length) {
+    if (!mod_) throw Exception("Invalid module");
+    if (JS_AddModuleExport(ctx_, mod_, name.c_str()) < 0)
+        throwJSException(ctx_);
+    state_->exports.push_back(detail::ModuleExport{
+        name,
+        [fn = std::decay_t<Fn>(std::forward<Fn>(fn)), length](JSContext* ctx) mutable {
+            return detail::make_js_function_(ctx, fn, "", length);
+        }
+    });
+    return *this;
+}
+
 } // namespace qjsb
