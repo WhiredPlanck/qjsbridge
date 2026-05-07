@@ -1,1 +1,0 @@
-/usr/bin/c++ -g3 -fno-inline -O2 -g -DNDEBUG -Wl,--dependency-file=CMakeFiles/example_hello.dir/link.d CMakeFiles/example_hello.dir/hello.cpp.o -o example_hello  /usr/lib/quickjs/libquickjs.a
