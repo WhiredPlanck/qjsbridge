@@ -221,6 +221,13 @@ struct Rectangle {
     void   setW(double v) { w = v; }
 };
 
+struct OverloadDemo {
+    int v{0};
+    int set(int x) { v = x; return v; }
+    std::string set(const std::string& s) { v = static_cast<int>(s.size()); return s; }
+    int get() const { return v; }
+};
+
 static void test_property() {
     Runtime rt; Context ctx(rt);
 
@@ -290,6 +297,45 @@ static void test_module_class_export() {
     assert(d == 100.0);
 }
 
+static void test_raw_method_manual_overload_dispatch() {
+    Runtime rt; Context ctx(rt);
+
+    ClassDef<OverloadDemo>(ctx, "OverloadDemo")
+        .constructor<>()
+        .rawMethod("set", [](JSContext* js,
+                             OverloadDemo* self,
+                             int argc,
+                             JSValueConst* argv) -> JSValue {
+            if (argc == 1 && JS_IsNumber(argv[0])) {
+                int32_t x = 0;
+                JS_ToInt32(js, &x, argv[0]);
+                return JS_NewInt32(js, self->set(static_cast<int>(x)));
+            }
+            if (argc == 1 && JS_IsString(argv[0])) {
+                const char* s = JS_ToCString(js, argv[0]);
+                if (!s) return JS_EXCEPTION;
+                std::string in(s);
+                JS_FreeCString(js, s);
+                std::string out = self->set(in);
+                return JS_NewStringLen(js, out.c_str(), out.size());
+            }
+            return JS_ThrowTypeError(js, "No matching overload for OverloadDemo.set()");
+        })
+        .method("get", &OverloadDemo::get)
+        .endClass();
+
+    Value n = ctx.eval("var o = new OverloadDemo(); o.set(12);");
+    int32_t ni = 0; JS_ToInt32(ctx.get(), &ni, n.get());
+    assert(ni == 12);
+
+    Value s = ctx.eval("o.set('abcd')");
+    assert(s.toString() == "abcd");
+
+    Value v = ctx.eval("o.get()");
+    int32_t vi = 0; JS_ToInt32(ctx.get(), &vi, v.get());
+    assert(vi == 4);
+}
+
 int main() {
     test_point_binding();
     test_counter_static();
@@ -301,5 +347,6 @@ int main() {
     test_property();
     test_multiple_classes();
     test_module_class_export();
+    test_raw_method_manual_overload_dispatch();
     return 0;
 }

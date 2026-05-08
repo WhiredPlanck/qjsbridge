@@ -24,6 +24,18 @@ struct CallableBase {
                          JSValueConst* argv) = 0;
 };
 
+struct RawCallable final : CallableBase {
+    RawFunctionCallback fn_;
+    explicit RawCallable(RawFunctionCallback fn) : fn_(std::move(fn)) {}
+
+    JSValue call(JSContext* ctx,
+                 JSValueConst this_val,
+                 int argc,
+                 JSValueConst* argv) override {
+        return fn_(ctx, this_val, argc, argv);
+    }
+};
+
 // ── Internal singleton: class ID for callable-wrapper JS objects ──────────────
 // Stores a CallableBase* as opaque data in a plain JS object.
 
@@ -152,6 +164,15 @@ inline JSValue make_js_function_(JSContext* ctx,
     return wrap_callable(ctx, cb, arity);
 }
 
+inline JSValue make_raw_js_function_(JSContext* ctx,
+                                     RawFunctionCallback fn,
+                                     int length = -1) {
+    int arity = (length >= 0) ? length : 0;
+    auto* cb = static_cast<CallableBase*>(
+        new RawCallable(std::move(fn)));
+    return wrap_callable(ctx, cb, arity);
+}
+
 } // namespace detail
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -174,6 +195,20 @@ inline Value makeFunction(Context& ctx,
     return makeFunction(ctx.get(), std::forward<Fn>(fn), name, length);
 }
 
+inline Value makeFunction(JSContext* ctx,
+                          RawFunctionCallback fn,
+                          const char* /*name*/ = "",
+                          int length = -1) {
+    return Value(ctx, detail::make_raw_js_function_(ctx, std::move(fn), length));
+}
+
+inline Value makeFunction(Context& ctx,
+                          RawFunctionCallback fn,
+                          const char* /*name*/ = "",
+                          int length = -1) {
+    return makeFunction(ctx.get(), std::move(fn), "", length);
+}
+
 // ── Context::bindFunction ─────────────────────────────────────────────────────
 
 template <typename Fn>
@@ -181,6 +216,15 @@ inline void Context::bindFunction(const std::string& name, Fn&& fn, int length) 
     JSValue g    = JS_GetGlobalObject(ctx_);
     JSValue func = detail::make_js_function_(ctx_, std::forward<Fn>(fn),
                                               name.c_str(), length);
+    JS_SetPropertyStr(ctx_, g, name.c_str(), func);
+    JS_FreeValue(ctx_, g);
+}
+
+inline void Context::bindFunctionRaw(const std::string& name,
+                                     RawFunctionCallback fn,
+                                     int length) {
+    JSValue g    = JS_GetGlobalObject(ctx_);
+    JSValue func = detail::make_raw_js_function_(ctx_, std::move(fn), length);
     JS_SetPropertyStr(ctx_, g, name.c_str(), func);
     JS_FreeValue(ctx_, g);
 }
@@ -194,6 +238,21 @@ inline Module& Module::bindFunction(const std::string& name, Fn&& fn, int length
         name,
         [fn = std::decay_t<Fn>(std::forward<Fn>(fn)), length](JSContext* ctx) mutable {
             return detail::make_js_function_(ctx, fn, "", length);
+        }
+    });
+    return *this;
+}
+
+inline Module& Module::bindFunctionRaw(const std::string& name,
+                                       RawFunctionCallback fn,
+                                       int length) {
+    if (!mod_) throw Exception("Invalid module");
+    if (JS_AddModuleExport(ctx_, mod_, name.c_str()) < 0)
+        throwJSException(ctx_);
+    state_->exports.push_back(detail::ModuleExport{
+        name,
+        [fn = std::move(fn), length](JSContext* ctx) mutable {
+            return detail::make_raw_js_function_(ctx, fn, length);
         }
     });
     return *this;

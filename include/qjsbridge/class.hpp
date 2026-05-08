@@ -219,6 +219,24 @@ private:
     }
 };
 
+template <typename T>
+struct RawMethodCallable final : CallableBase {
+    using Fn = std::function<JSValue(JSContext*, T*, int, JSValueConst*)>;
+    Fn fn_;
+
+    explicit RawMethodCallable(Fn fn) : fn_(std::move(fn)) {}
+
+    JSValue call(JSContext* ctx,
+                 JSValueConst this_val,
+                 int argc,
+                 JSValueConst* argv) override {
+        T* self = ClassRegistry<T>::get_ptr(ctx, this_val);
+        if (!self)
+            return JS_ThrowTypeError(ctx, "Invalid 'this': expected bound C++ object");
+        return fn_(ctx, self, argc, argv);
+    }
+};
+
 // ── ConstructorCallable<T, Args...> ──────────────────────────────────────────
 
 template <typename T, typename... Args>
@@ -315,6 +333,7 @@ class ClassDef {
     }
 
 public:
+    using RawMethodCallback = std::function<JSValue(JSContext*, T*, int, JSValueConst*)>;
     ClassDef(JSContext* ctx, const char* name)
         : ctx_(ctx), name_(name),
           proto_(JS_NewObject(ctx)),
@@ -390,6 +409,18 @@ public:
             ? static_cast<int>(Traits::arity) - 1 : 0;
         auto* cb = new detail::MethodCallable<T, std::decay_t<Fn>>(
             std::forward<Fn>(fn));
+        JS_SetPropertyStr(ctx_, proto_, name, make_fn_(cb, js_arity));
+        return *this;
+    }
+
+    /// Low-level method callback:
+    ///   fn(ctx, self, argc, argv) -> JSValue
+    /// Useful for manual overload dispatch by checking argc/argument types.
+    ClassDef& rawMethod(const char* name,
+                        RawMethodCallback fn,
+                        int length = -1) {
+        int js_arity = (length >= 0) ? length : 0;
+        auto* cb = new detail::RawMethodCallable<T>(std::move(fn));
         JS_SetPropertyStr(ctx_, proto_, name, make_fn_(cb, js_arity));
         return *this;
     }

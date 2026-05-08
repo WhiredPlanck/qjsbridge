@@ -173,6 +173,27 @@ qjsb::Value fn = qjsb::makeFunction(ctx, [](int x) { return x * x; });
 ctx.setGlobal("square", std::move(fn));
 ```
 
+### Manual overload dispatch (raw callback)
+
+```cpp
+ctx.bindFunctionRaw("overload", [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
+    if (argc == 2 && JS_IsNumber(argv[0]) && JS_IsNumber(argv[1])) {
+        int32_t a = 0, b = 0;
+        JS_ToInt32(ctx, &a, argv[0]);
+        JS_ToInt32(ctx, &b, argv[1]);
+        return JS_NewInt32(ctx, a + b);
+    }
+    if (argc == 1 && JS_IsString(argv[0])) {
+        const char* s = JS_ToCString(ctx, argv[0]);
+        if (!s) return JS_EXCEPTION;
+        std::string out = std::string("hello ") + s;
+        JS_FreeCString(ctx, s);
+        return JS_NewString(ctx, out.c_str());
+    }
+    return JS_ThrowTypeError(ctx, "No matching overload");
+});
+```
+
 ---
 
 ## Class Binding
@@ -200,6 +221,18 @@ qjsb::ClassDef<Vec2>(ctx, "Vec2")
 //   console.log(v.length);   // 5
 //   var w = Vec2.zero();
 //   var u = v.add(w);
+```
+
+```cpp
+// Manual overload dispatch on instance methods:
+qjsb::ClassDef<MyClass>(ctx, "MyClass")
+    .constructor<>()
+    .rawMethod("set", [](JSContext* ctx, MyClass* self, int argc, JSValueConst* argv) -> JSValue {
+        if (argc == 1 && JS_IsNumber(argv[0])) { /* self->set(int) */ }
+        if (argc == 1 && JS_IsString(argv[0])) { /* self->set(std::string) */ }
+        return JS_ThrowTypeError(ctx, "No matching overload");
+    })
+    .endClass();
 ```
 
 ```cpp
@@ -273,6 +306,7 @@ RAII owner of `JSContext`.
 | `getGlobal(name)` / `setGlobal(name, v)` | Access global variables          |
 | `newObject()` / `newArray()`       | Create JS objects/arrays                 |
 | `bindFunction(name, fn, length?)`  | Bind a C++ callable as a global function |
+| `bindFunctionRaw(name, fn, length?)` | Bind a raw callback (`ctx,this,argc,argv`) |
 | `newModule(name)`                  | Create a C module for ES `import` exports |
 | `evalModule(code, filename?)`      | Evaluate module code (`JS_EVAL_TYPE_MODULE`) |
 | `get()`                            | Raw `JSContext*`                         |
@@ -298,6 +332,7 @@ Owning RAII wrapper for `JSValue`.
 |-------------------------------------|-------------------------------------------|
 | `constructor<Args...>()`            | Register constructor with given argument types |
 | `method(name, fn)`                  | Instance method (member ptr or free fn)   |
+| `rawMethod(name, fn, length?)`      | Raw instance callback (`ctx,self,argc,argv`) |
 | `field(name, member_ptr)`           | Direct field with auto getter+setter      |
 | `property(name, getter)`            | Getter-only property                       |
 | `property(name, getter, setter)`    | Read-write property                        |
@@ -311,6 +346,7 @@ Owning RAII wrapper for `JSValue`.
 | Method                                 | Description                              |
 |----------------------------------------|------------------------------------------|
 | `bindFunction(name, fn, length?)`      | Export callable from module              |
+| `bindFunctionRaw(name, fn, length?)`   | Export raw callable (`ctx,this,argc,argv`) |
 | `exportValue(name, value)`             | Export existing JS value                 |
 | `get()`                                | Raw `JSModuleDef*`                       |
 
