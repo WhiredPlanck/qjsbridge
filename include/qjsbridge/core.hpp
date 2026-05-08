@@ -12,8 +12,12 @@
 #endif
 
 #include <cstdio>
+#include <cstring>
+#include <filesystem>
 #include <functional>
+#include <fstream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -46,6 +50,74 @@ public:
     explicit TypeError(const std::string& msg) : Exception("TypeError: " + msg) {}
 };
 
+/// High-level configurable QuickJS module loader.
+/// Supports:
+/// - custom module-name normalization
+/// - custom source loading strategy
+/// - filesystem loading with custom file-reader hook
+class ModuleLoader {
+public:
+    using NormalizeFn = std::function<std::string(
+        JSContext* ctx,
+        const std::string& module_base_name,
+        const std::string& module_name)>;
+
+    using SourceLoaderFn = std::function<std::optional<std::string>(
+        JSContext* ctx,
+        const std::string& normalized_name)>;
+
+    using FileReaderFn = std::function<std::optional<std::string>(
+        const std::string& path)>;
+
+private:
+    NormalizeFn normalize_;
+    SourceLoaderFn source_loader_;
+    FileReaderFn file_reader_;
+    std::vector<std::string> search_paths_;
+    std::vector<std::string> extensions_{"", ".js", ".mjs"};
+
+public:
+    ModuleLoader() = default;
+
+    ModuleLoader& setNormalize(NormalizeFn fn) {
+        normalize_ = std::move(fn);
+        return *this;
+    }
+
+    ModuleLoader& setSourceLoader(SourceLoaderFn fn) {
+        source_loader_ = std::move(fn);
+        return *this;
+    }
+
+    ModuleLoader& setFileReader(FileReaderFn fn) {
+        file_reader_ = std::move(fn);
+        return *this;
+    }
+
+    ModuleLoader& addSearchPath(std::string path) {
+        search_paths_.push_back(std::move(path));
+        return *this;
+    }
+
+    ModuleLoader& clearSearchPaths() {
+        search_paths_.clear();
+        return *this;
+    }
+
+    ModuleLoader& setExtensions(std::vector<std::string> exts) {
+        extensions_ = std::move(exts);
+        if (extensions_.empty())
+            extensions_.push_back("");
+        return *this;
+    }
+
+    const NormalizeFn& normalize() const noexcept { return normalize_; }
+    const SourceLoaderFn& sourceLoader() const noexcept { return source_loader_; }
+    const FileReaderFn& fileReader() const noexcept { return file_reader_; }
+    const std::vector<std::string>& searchPaths() const noexcept { return search_paths_; }
+    const std::vector<std::string>& extensions() const noexcept { return extensions_; }
+};
+
 // ── JS_NewClassID compatibility shim ─────────────────────────────────────────
 // Original QuickJS:  JS_NewClassID(JSClassID *pclass_id)
 // QuickJS-ng:        JS_NewClassID(JSRuntime *rt, JSClassID *pclass_id)
@@ -60,6 +132,141 @@ namespace detail {
         return JS_NewClassID(id);
     }
 #endif
+
+inline std::string default_module_normalize_(const std::string& module_base_name,
+                                             const std::string& module_name) {
+    namespace fs = std::filesystem;
+    fs::path name(module_name);
+    if (module_name.rfind("./", 0) == 0 || module_name.rfind("../", 0) == 0) {
+        fs::path base(module_base_name);
+        fs::path base_dir = base.has_parent_path() ? base.parent_path() : fs::path(".");
+        return (base_dir / name).lexically_normal().generic_string();
+    }
+    return name.lexically_normal().generic_string();
+}
+
+inline std::optional<std::string> default_read_file_(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open())
+        return std::nullopt;
+    std::string content((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+    return content;
+}
+
+inline std::optional<std::string> module_loader_read_source_(
+    const ModuleLoader& loader,
+    const std::string& module_name) {
+    namespace fs = std::filesystem;
+    std::vector<fs::path> candidates;
+    fs::path requested(module_name);
+
+    auto append_with_extensions = [&](const fs::path& p) {
+        if (p.has_extension()) {
+            candidates.push_back(p);
+            return;
+        }
+        for (const auto& ext : loader.extensions()) {
+            if (ext.empty()) candidates.push_back(p);
+            else candidates.push_back(p.string() + ext);
+        }
+    };
+
+    append_with_extensions(requested);
+    for (const auto& root : loader.searchPaths()) {
+        append_with_extensions(fs::path(root) / requested);
+    }
+
+    for (const auto& candidate : candidates) {
+        std::optional<std::string> src;
+        if (loader.fileReader()) {
+            src = loader.fileReader()(candidate.generic_string());
+        } else {
+            src = default_read_file_(candidate.generic_string());
+        }
+        if (src) return src;
+    }
+    return std::nullopt;
+}
+
+inline char* module_loader_normalize_dispatch_(JSContext* ctx,
+                                               const char* module_base_name,
+                                               const char* module_name,
+                                               void* opaque) {
+    auto* loader = static_cast<ModuleLoader*>(opaque);
+    if (!loader || !module_name)
+        return nullptr;
+
+    std::string normalized;
+    try {
+        if (loader->normalize()) {
+            normalized = loader->normalize()(
+                ctx,
+                module_base_name ? module_base_name : "",
+                module_name);
+        } else {
+            normalized = default_module_normalize_(
+                module_base_name ? module_base_name : "",
+                module_name);
+        }
+    } catch (const std::exception& e) {
+        JS_ThrowInternalError(ctx, "module normalize failed: %s", e.what());
+        return nullptr;
+    } catch (...) {
+        JS_ThrowInternalError(ctx, "module normalize failed");
+        return nullptr;
+    }
+
+    char* out = static_cast<char*>(js_malloc(ctx, normalized.size() + 1));
+    if (!out) return nullptr;
+    std::memcpy(out, normalized.c_str(), normalized.size());
+    out[normalized.size()] = '\0';
+    return out;
+}
+
+inline JSModuleDef* module_loader_dispatch_(JSContext* ctx,
+                                            const char* module_name,
+                                            void* opaque) {
+    auto* loader = static_cast<ModuleLoader*>(opaque);
+    if (!loader || !module_name)
+        return nullptr;
+
+    std::optional<std::string> source;
+    try {
+        if (loader->sourceLoader()) {
+            source = loader->sourceLoader()(ctx, module_name);
+        } else {
+            source = module_loader_read_source_(*loader, module_name);
+        }
+    } catch (const std::exception& e) {
+        JS_ThrowInternalError(ctx, "module loader failed: %s", e.what());
+        return nullptr;
+    } catch (...) {
+        JS_ThrowInternalError(ctx, "module loader failed");
+        return nullptr;
+    }
+
+    if (!source) {
+        JS_ThrowReferenceError(ctx, "Could not load module '%s'", module_name);
+        return nullptr;
+    }
+
+    JSValue func_val = JS_Eval(ctx,
+                               source->c_str(),
+                               source->size(),
+                               module_name,
+                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    if (JS_IsException(func_val))
+        return nullptr;
+
+    if (JS_VALUE_GET_TAG(func_val) != JS_TAG_MODULE) {
+        JS_FreeValue(ctx, func_val);
+        JS_ThrowTypeError(ctx, "Loaded script is not a module: '%s'", module_name);
+        return nullptr;
+    }
+
+    return static_cast<JSModuleDef*>(JS_VALUE_GET_PTR(func_val));
+}
 
 struct ModuleExport {
     std::string name;
@@ -100,6 +307,7 @@ inline int module_init_dispatch(JSContext* ctx, JSModuleDef* m) {
 /// RAII owner of a JSRuntime.
 class Runtime {
     JSRuntime* rt_;
+    std::shared_ptr<ModuleLoader> module_loader_;
 public:
     Runtime() : rt_(JS_NewRuntime()) {
         if (!rt_) throw Exception("Failed to create JSRuntime");
@@ -127,7 +335,16 @@ public:
     void setModuleLoader(JSModuleNormalizeFunc* normalize,
                          JSModuleLoaderFunc* loader,
                          void* opaque = nullptr) noexcept {
+        module_loader_.reset();
         JS_SetModuleLoaderFunc(rt_, normalize, loader, opaque);
+    }
+
+    void setModuleLoader(ModuleLoader loader) {
+        module_loader_ = std::make_shared<ModuleLoader>(std::move(loader));
+        JS_SetModuleLoaderFunc(rt_,
+                               detail::module_loader_normalize_dispatch_,
+                               detail::module_loader_dispatch_,
+                               module_loader_.get());
     }
 };
 
