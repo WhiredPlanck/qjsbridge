@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: Apache-2.0
 // qjsbridge – umbrella header
 //
 // Include this single header to get the full library.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: Apache-2.0
 // qjsbridge – C++ class / struct binding
 #pragma once
 
@@ -156,16 +156,10 @@ struct MethodCallable final : CallableBase {
         T* self = ClassRegistry<T>::get_ptr(ctx, this_val);
         if (!self)
             return JS_ThrowTypeError(ctx, "Invalid 'this': expected bound C++ object");
-        try {
+        return with_cpp_exception_guard(ctx, [&]() {
             return invoke(ctx, self, argc, argv,
                           std::make_index_sequence<Arity>{});
-        } catch (const std::exception& e) {
-            JSValue err = JS_NewError(ctx);
-            JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, e.what()));
-            return JS_Throw(ctx, err);
-        } catch (...) {
-            return JS_ThrowInternalError(ctx, "Unknown C++ exception");
-        }
+        });
     }
 
 private:
@@ -245,24 +239,17 @@ struct ConstructorCallable final : CallableBase {
                  JSValueConst /*this_val*/,
                  int argc,
                  JSValueConst* argv) override {
-        return call_impl(ctx, argc, argv,
-                         std::make_index_sequence<sizeof...(Args)>{});
+        return with_cpp_exception_guard(ctx, [&]() {
+            return call_impl(ctx, argc, argv,
+                             std::make_index_sequence<sizeof...(Args)>{});
+        });
     }
 
     template <std::size_t... Is>
     JSValue call_impl(JSContext* ctx, int argc, JSValueConst* argv,
                       std::index_sequence<Is...>) {
-        try {
-            T* obj = new T(
-                extract_arg<Args>(ctx, argc, argv, Is)...);
-            return ClassRegistry<T>::push_owned(ctx, obj);
-        } catch (const std::exception& e) {
-            JSValue err = JS_NewError(ctx);
-            JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, e.what()));
-            return JS_Throw(ctx, err);
-        } catch (...) {
-            return JS_ThrowInternalError(ctx, "Unknown C++ exception in constructor");
-        }
+        T* obj = new T(extract_arg<Args>(ctx, argc, argv, Is)...);
+        return ClassRegistry<T>::push_owned(ctx, obj);
     }
 };
 
@@ -276,13 +263,9 @@ struct FieldGetter final : CallableBase {
     JSValue call(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) override {
         T* self = ClassRegistry<T>::get_ptr(ctx, this_val);
         if (!self) return JS_ThrowTypeError(ctx, "Invalid 'this'");
-        try {
+        return with_cpp_exception_guard(ctx, [&]() {
             return Converter<remove_cvref_t<M>>::to_js(ctx, self->*member_);
-        } catch (const std::exception& e) {
-            JSValue err = JS_NewError(ctx);
-            JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, e.what()));
-            return JS_Throw(ctx, err);
-        }
+        });
     }
 };
 
@@ -296,14 +279,10 @@ struct FieldSetter final : CallableBase {
         T* self = ClassRegistry<T>::get_ptr(ctx, this_val);
         if (!self) return JS_ThrowTypeError(ctx, "Invalid 'this'");
         if (argc < 1) return JS_ThrowTypeError(ctx, "Setter requires 1 argument");
-        try {
+        return with_cpp_exception_guard(ctx, [&]() -> JSValue {
             self->*member_ = Converter<remove_cvref_t<M>>::from_js(ctx, argv[0]);
             return JS_UNDEFINED;
-        } catch (const std::exception& e) {
-            JSValue err = JS_NewError(ctx);
-            JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, e.what()));
-            return JS_Throw(ctx, err);
-        }
+        });
     }
 };
 
@@ -554,15 +533,9 @@ private:
         auto* cb = static_cast<detail::CallableBase*>(
             JS_GetOpaque(func_data[0], detail::callable_class_id_()));
         if (!cb) return JS_ThrowTypeError(ctx, "Invalid constructor callable");
-        try {
+        return detail::with_cpp_exception_guard(ctx, [&]() {
             return cb->call(ctx, this_val, argc, argv);
-        } catch (const std::exception& e) {
-            JSValue err = JS_NewError(ctx);
-            JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, e.what()));
-            return JS_Throw(ctx, err);
-        } catch (...) {
-            return JS_ThrowInternalError(ctx, "Unknown C++ exception in constructor");
-        }
+        });
     }
 
     // Helper for property(): wrap any getter callable into a JS function.

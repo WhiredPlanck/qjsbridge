@@ -306,8 +306,8 @@ RAII owner of `JSContext`.
 | `globalObject()`                   | Returns the global `Value`               |
 | `getGlobal(name)` / `setGlobal(name, v)` | Access global variables          |
 | `newObject()` / `newArray()`       | Create JS objects/arrays                 |
-| `bindFunction(name, fn, length?)`  | Bind a C++ callable as a global function |
-| `bindFunctionRaw(name, fn, length?)` | Bind a raw callback (`ctx,this,argc,argv`) |
+| `bindFunction(name, fn, length?)`  | Bind a C++ callable or raw callback (`ctx,this_val,argc,argv`) as a global function |
+| `bindFunctionRaw(name, fn, length?)` | Alias for `bindFunction` with a raw callback (backward compatibility) |
 | `newModule(name)`                  | Create a C module for ES `import` exports |
 | `evalModule(code, filename?)`      | Evaluate module code (`JS_EVAL_TYPE_MODULE`) |
 | `get()`                            | Raw `JSContext*`                         |
@@ -405,4 +405,4 @@ cmake -B build -DQUICKJS_INCLUDE_DIRS=/path/to/include \
 
 ## License
 
-MIT
+Apache 2.0

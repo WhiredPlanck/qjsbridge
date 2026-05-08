@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: Apache-2.0
 // qjsbridge – function/lambda binding
 #pragma once
 
@@ -36,6 +36,19 @@ struct RawCallable final : CallableBase {
     }
 };
 
+// ── Exception guard: propagate C++ exceptions as JS errors ───────────────────
+
+template <typename F>
+inline JSValue with_cpp_exception_guard(JSContext* ctx, F&& f) noexcept {
+    try { return std::forward<F>(f)(); }
+    catch (const std::exception& e) {
+        JSValue err = JS_NewError(ctx);
+        JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, e.what()));
+        return JS_Throw(ctx, err);
+    }
+    catch (...) { return JS_ThrowInternalError(ctx, "Unknown C++ exception"); }
+}
+
 // ── Internal singleton: class ID for callable-wrapper JS objects ──────────────
 // Stores a CallableBase* as opaque data in a plain JS object.
 
@@ -71,15 +84,9 @@ inline JSValue callable_dispatch_(JSContext* ctx,
     auto* cb = static_cast<CallableBase*>(
         JS_GetOpaque(func_data[0], callable_class_id_()));
     if (!cb) return JS_ThrowTypeError(ctx, "Invalid callable wrapper");
-    try {
+    return with_cpp_exception_guard(ctx, [&]() {
         return cb->call(ctx, this_val, argc, argv);
-    } catch (const std::exception& e) {
-        JSValue err = JS_NewError(ctx);
-        JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, e.what()));
-        return JS_Throw(ctx, err);
-    } catch (...) {
-        return JS_ThrowInternalError(ctx, "Unknown C++ exception");
-    }
+    });
 }
 
 // ── Argument extraction from JS argv ─────────────────────────────────────────
@@ -177,9 +184,11 @@ inline JSValue make_raw_js_function_(JSContext* ctx,
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Wrap any C++ callable (function pointer, lambda, std::function) as a
-/// JS function Value.  'length' overrides the JS .length hint.
-template <typename Fn>
+/// Wrap any C++ callable (function pointer, lambda, std::function, or raw
+/// callback `ctx,this_val,argc,argv → JSValue`) as a JS function Value.
+/// 'length' overrides the JS .length hint.
+template <typename Fn,
+          std::enable_if_t<!std::is_convertible_v<Fn, RawFunctionCallback>, int> = 0>
 inline Value makeFunction(JSContext* ctx,
                           Fn&& fn,
                           const char* name = "",
@@ -187,7 +196,8 @@ inline Value makeFunction(JSContext* ctx,
     return Value(ctx, detail::make_js_function_(ctx, std::forward<Fn>(fn), name, length));
 }
 
-template <typename Fn>
+template <typename Fn,
+          std::enable_if_t<!std::is_convertible_v<Fn, RawFunctionCallback>, int> = 0>
 inline Value makeFunction(Context& ctx,
                           Fn&& fn,
                           const char* name = "",
@@ -195,23 +205,29 @@ inline Value makeFunction(Context& ctx,
     return makeFunction(ctx.get(), std::forward<Fn>(fn), name, length);
 }
 
+template <typename RawFn,
+          std::enable_if_t<std::is_convertible_v<RawFn, RawFunctionCallback>, int> = 0>
 inline Value makeFunction(JSContext* ctx,
-                          RawFunctionCallback fn,
+                          RawFn&& fn,
                           const char* /*name*/ = "",
                           int length = -1) {
-    return Value(ctx, detail::make_raw_js_function_(ctx, std::move(fn), length));
+    return Value(ctx, detail::make_raw_js_function_(
+        ctx, RawFunctionCallback(std::forward<RawFn>(fn)), length));
 }
 
+template <typename RawFn,
+          std::enable_if_t<std::is_convertible_v<RawFn, RawFunctionCallback>, int> = 0>
 inline Value makeFunction(Context& ctx,
-                          RawFunctionCallback fn,
-                          const char* /*name*/ = "",
+                          RawFn&& fn,
+                          const char* name = "",
                           int length = -1) {
-    return makeFunction(ctx.get(), std::move(fn), "", length);
+    return makeFunction(ctx.get(), std::forward<RawFn>(fn), name, length);
 }
 
 // ── Context::bindFunction ─────────────────────────────────────────────────────
 
-template <typename Fn>
+template <typename Fn,
+          std::enable_if_t<!std::is_convertible_v<Fn, RawFunctionCallback>, int>>
 inline void Context::bindFunction(const std::string& name, Fn&& fn, int length) {
     JSValue g    = JS_GetGlobalObject(ctx_);
     JSValue func = detail::make_js_function_(ctx_, std::forward<Fn>(fn),
@@ -220,13 +236,20 @@ inline void Context::bindFunction(const std::string& name, Fn&& fn, int length) 
     JS_FreeValue(ctx_, g);
 }
 
+template <typename RawFn,
+          std::enable_if_t<std::is_convertible_v<RawFn, RawFunctionCallback>, int>>
+inline void Context::bindFunction(const std::string& name, RawFn&& fn, int length) {
+    JSValue g    = JS_GetGlobalObject(ctx_);
+    JSValue func = detail::make_raw_js_function_(
+        ctx_, RawFunctionCallback(std::forward<RawFn>(fn)), length);
+    JS_SetPropertyStr(ctx_, g, name.c_str(), func);
+    JS_FreeValue(ctx_, g);
+}
+
 inline void Context::bindFunctionRaw(const std::string& name,
                                      RawFunctionCallback fn,
                                      int length) {
-    JSValue g    = JS_GetGlobalObject(ctx_);
-    JSValue func = detail::make_raw_js_function_(ctx_, std::move(fn), length);
-    JS_SetPropertyStr(ctx_, g, name.c_str(), func);
-    JS_FreeValue(ctx_, g);
+    bindFunction(name, std::move(fn), length);
 }
 
 template <typename Fn,

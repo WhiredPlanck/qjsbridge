@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: Apache-2.0
 // qjsbridge – type conversion system (Converter<T> specialisations)
 #pragma once
 
@@ -132,9 +132,6 @@ struct Converter<T, std::enable_if_t<std::is_enum_v<T>>> {
 template <>
 struct Converter<std::string> {
     static JSValue to_js(JSContext* ctx, const std::string& v) {
-        return JS_NewStringLen(ctx, v.data(), v.size());
-    }
-    static JSValue to_js(JSContext* ctx, std::string&& v) {
         return JS_NewStringLen(ctx, v.data(), v.size());
     }
     static std::string from_js(JSContext* ctx, JSValueConst v) {

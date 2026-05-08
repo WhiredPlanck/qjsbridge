@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: Apache-2.0
 // qjsbridge – RAII wrappers for JSRuntime, JSContext, JSValue + exception types
 #pragma once
 
@@ -317,7 +317,7 @@ inline int module_init_dispatch(JSContext* ctx, JSModuleDef* m) {
 /// RAII owner of a JSRuntime.
 class Runtime {
     JSRuntime* rt_;
-    std::shared_ptr<ModuleLoader> module_loader_;
+    std::unique_ptr<ModuleLoader> module_loader_;
 public:
     Runtime() : rt_(JS_NewRuntime()) {
         if (!rt_) throw Exception("Failed to create JSRuntime");
@@ -350,7 +350,7 @@ public:
     }
 
     void setModuleLoader(ModuleLoader loader) {
-        module_loader_ = std::make_shared<ModuleLoader>(std::move(loader));
+        module_loader_ = std::make_unique<ModuleLoader>(std::move(loader));
         JS_SetModuleLoaderFunc(rt_,
                                detail::module_loader_normalize_dispatch_,
                                detail::module_loader_dispatch_,
@@ -490,14 +490,14 @@ public:
 
 // ── Pending-exception helpers ─────────────────────────────────────────────────
 
-namespace detail {
-
-inline std::string extractExceptionMessage(JSContext* ctx) {
+/// Fetch and throw the pending JS exception as a C++ JSException.
+/// `JSException::what()` returns the JS error message string;
+/// `JSException::stack()` returns the optional stack trace.
+[[noreturn]] inline void throwJSException(JSContext* ctx) {
     JSValue exc = JS_GetException(ctx);
 
-    // message string
-    JSValue ms = JS_ToString(ctx, exc);
     std::string msg;
+    JSValue ms = JS_ToString(ctx, exc);
     if (!JS_IsException(ms)) {
         size_t len;
         const char* p = JS_ToCStringLen(ctx, &len, ms);
@@ -505,7 +505,6 @@ inline std::string extractExceptionMessage(JSContext* ctx) {
     }
     JS_FreeValue(ctx, ms);
 
-    // optional stack trace
     std::string stack;
     JSValue sv = JS_GetPropertyStr(ctx, exc, "stack");
     if (!JS_IsException(sv) && !JS_IsUndefined(sv)) {
@@ -515,14 +514,8 @@ inline std::string extractExceptionMessage(JSContext* ctx) {
     }
     JS_FreeValue(ctx, sv);
     JS_FreeValue(ctx, exc);
-    return stack.empty() ? msg : msg + "\n" + stack;
-}
 
-} // namespace detail
-
-/// Fetch and throw the pending JS exception as a C++ JSException.
-[[noreturn]] inline void throwJSException(JSContext* ctx) {
-    throw JSException(detail::extractExceptionMessage(ctx));
+    throw JSException(msg, std::move(stack));
 }
 
 class Module;
@@ -614,8 +607,12 @@ public:
     Value newArray()  { return Value(ctx_, JS_NewArray(ctx_)); }
 
     // ── Function binding (implemented in function.hpp) ────────────────────────
-    template <typename Fn>
+    template <typename Fn,
+              std::enable_if_t<!std::is_convertible_v<Fn, RawFunctionCallback>, int> = 0>
     void bindFunction(const std::string& name, Fn&& fn, int length = -1);
+    template <typename RawFn,
+              std::enable_if_t<std::is_convertible_v<RawFn, RawFunctionCallback>, int> = 0>
+    void bindFunction(const std::string& name, RawFn&& fn, int length = -1);
     void bindFunctionRaw(const std::string& name,
                          RawFunctionCallback fn,
                          int length = -1);
