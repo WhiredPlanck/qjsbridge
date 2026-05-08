@@ -417,6 +417,7 @@ public:
     /// Low-level method callback:
     ///   fn(ctx, self, argc, argv) -> JSValue
     /// Useful for manual overload dispatch by checking argc/argument types.
+    /// Callback must be copyable (stored as std::function).
     template <typename Fn,
               std::enable_if_t<std::is_convertible_v<Fn, RawMethodCallback>, int> = 0>
     ClassDef& method(const char* name, Fn&& fn, int length = -1) {

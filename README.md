@@ -233,6 +233,7 @@ qjsb::ClassDef<MyClass>(ctx, "MyClass")
         return JS_ThrowTypeError(ctx, "No matching overload");
     })
     .endClass();
+// Note: raw-callback lambdas are stored as std::function, so they must be copyable.
 ```
 
 ```cpp
