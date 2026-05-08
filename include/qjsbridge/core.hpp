@@ -173,18 +173,12 @@ public:
     Runtime(Runtime&& o) noexcept
         : rt_(o.rt_) {
         o.rt_ = nullptr;
-        if (rt_) {
-            JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, nullptr);
-        }
     }
     Runtime& operator=(Runtime&& o) noexcept {
         if (this != &o) {
             if (rt_) JS_FreeRuntime(rt_);
             rt_ = o.rt_;
             o.rt_ = nullptr;
-            if (rt_) {
-                JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, nullptr);
-            }
         }
         return *this;
     }
