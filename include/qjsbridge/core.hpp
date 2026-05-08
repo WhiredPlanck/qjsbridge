@@ -204,7 +204,11 @@ public:
     }
 
     void setModuleLoader(ModuleLoader loader) {
-        module_loader_ = loader ? std::move(loader) : detail::default_module_loader_();
+        if (loader) {
+            module_loader_ = std::move(loader);
+        } else {
+            module_loader_ = detail::default_module_loader_();
+        }
         JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, this);
     }
 };
