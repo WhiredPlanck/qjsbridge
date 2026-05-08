@@ -1,6 +1,7 @@
 // examples/custom_module_loader.cpp – custom module loader with in-memory sources
 
 #include <qjsbridge.hpp>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 
@@ -15,9 +16,10 @@ int main() {
         .setNormalize([](JSContext*, const std::string& base, const std::string& name) {
             if (name == "pkg") return std::string("virtual/pkg.mjs");
             if (name == "./dep") {
-                const auto pos = base.find_last_of('/');
-                const std::string dir = (pos == std::string::npos) ? "" : base.substr(0, pos + 1);
-                return dir + "dep.mjs";
+                const std::filesystem::path base_path(base);
+                const std::filesystem::path dir =
+                    base_path.has_parent_path() ? base_path.parent_path() : std::filesystem::path(".");
+                return (dir / "dep.mjs").generic_string();
             }
             return name;
         })
@@ -40,4 +42,3 @@ int main() {
     std::cout << ctx.eval("msg").toString() << "\n";
     return 0;
 }
-

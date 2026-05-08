@@ -51,10 +51,15 @@ public:
 };
 
 /// High-level configurable QuickJS module loader.
-/// Supports:
-/// - custom module-name normalization
-/// - custom source loading strategy
-/// - filesystem loading with custom file-reader hook
+///
+/// Typical usage:
+///   1) configure normalize/source/file-read hooks on ModuleLoader
+///   2) install with Runtime::setModuleLoader(ModuleLoader)
+///   3) evaluate module code via Context::evalModule(...)
+///
+/// Compared with Runtime::setModuleLoader(JSModuleNormalizeFunc*, ...),
+/// this API is C++-friendly (std::function hooks) and keeps loader lifetime
+/// tied to Runtime to avoid dangling opaque pointers.
 class ModuleLoader {
 public:
     using NormalizeFn = std::function<std::string(
@@ -133,12 +138,12 @@ namespace detail {
     }
 #endif
 
-inline std::string default_module_normalize_(const std::string& module_base_name,
+inline std::string default_module_normalize_(const std::string& base_module_path,
                                              const std::string& module_name) {
     namespace fs = std::filesystem;
     fs::path name(module_name);
     if (module_name.rfind("./", 0) == 0 || module_name.rfind("../", 0) == 0) {
-        fs::path base(module_base_name);
+        fs::path base(base_module_path);
         fs::path base_dir = base.has_parent_path() ? base.parent_path() : fs::path(".");
         return (base_dir / name).lexically_normal().generic_string();
     }
@@ -247,7 +252,10 @@ inline JSModuleDef* module_loader_dispatch_(JSContext* ctx,
     }
 
     if (!source) {
-        JS_ThrowReferenceError(ctx, "Could not load module '%s'", module_name);
+        JS_ThrowReferenceError(
+            ctx,
+            "Could not load module '%s' (source loader returned empty and filesystem lookup failed)",
+            module_name);
         return nullptr;
     }
 
