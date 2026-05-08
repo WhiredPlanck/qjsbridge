@@ -181,6 +181,44 @@ static void test_module_function_binding() {
     assert(n == 15);
 }
 
+static void test_module_raw_function_manual_overload_dispatch() {
+    Runtime rt; Context ctx(rt);
+    auto module = ctx.newModule("module_overload");
+    module.bindFunction("overload", [](JSContext* js,
+                                       JSValueConst /*this_val*/,
+                                       int argc,
+                                       JSValueConst* argv) -> JSValue {
+        if (argc == 2 && JS_IsNumber(argv[0]) && JS_IsNumber(argv[1])) {
+            int32_t a = 0, b = 0;
+            JS_ToInt32(js, &a, argv[0]);
+            JS_ToInt32(js, &b, argv[1]);
+            return JS_NewInt32(js, a + b);
+        }
+        if (argc == 1 && JS_IsString(argv[0])) {
+            const char* s = JS_ToCString(js, argv[0]);
+            if (!s) return JS_EXCEPTION;
+            std::string out = std::string("hello ") + s;
+            JS_FreeCString(js, s);
+            return JS_NewStringLen(js, out.c_str(), out.size());
+        }
+        return JS_ThrowTypeError(js, "No matching overload for module overload()");
+    });
+
+    ctx.evalModule(R"(
+        import { overload } from "module_overload";
+        globalThis.mOverloadN = overload(7, 8);
+        globalThis.mOverloadS = overload("qjs");
+    )", "module_overload_test.mjs");
+
+    Value n = ctx.eval("mOverloadN");
+    int32_t ni = 0;
+    JS_ToInt32(ctx.get(), &ni, n.get());
+    assert(ni == 15);
+
+    Value s = ctx.eval("mOverloadS");
+    assert(s.toString() == "hello qjs");
+}
+
 static void test_raw_function_manual_overload_dispatch() {
     Runtime rt; Context ctx(rt);
     ctx.bindFunctionRaw("overload", [](JSContext* js,
@@ -226,6 +264,7 @@ int main() {
     test_optional_arg();
     test_multiple_bindings();
     test_module_function_binding();
+    test_module_raw_function_manual_overload_dispatch();
     test_raw_function_manual_overload_dispatch();
     return 0;
 }
