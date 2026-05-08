@@ -160,11 +160,10 @@ inline int module_init_dispatch(JSContext* ctx, JSModuleDef* m) {
 /// RAII owner of a JSRuntime.
 class Runtime {
     JSRuntime* rt_;
-    ModuleLoader module_loader_{detail::default_module_loader_()};
 public:
     Runtime() : rt_(JS_NewRuntime()) {
         if (!rt_) throw Exception("Failed to create JSRuntime");
-        JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, this);
+        JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, nullptr);
     }
     ~Runtime() noexcept { if (rt_) JS_FreeRuntime(rt_); }
 
@@ -172,45 +171,29 @@ public:
     Runtime& operator=(const Runtime&) = delete;
 
     Runtime(Runtime&& o) noexcept
-        : rt_(o.rt_), module_loader_(std::move(o.module_loader_)) {
+        : rt_(o.rt_) {
         o.rt_ = nullptr;
         if (rt_) {
-            JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, this);
+            JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, nullptr);
         }
     }
     Runtime& operator=(Runtime&& o) noexcept {
         if (this != &o) {
             if (rt_) JS_FreeRuntime(rt_);
             rt_ = o.rt_;
-            module_loader_ = std::move(o.module_loader_);
             o.rt_ = nullptr;
             if (rt_) {
-                JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, this);
+                JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, nullptr);
             }
         }
         return *this;
     }
 
     JSRuntime* get() const noexcept { return rt_; }
-    const ModuleLoader& defaultModuleLoader() const noexcept { return module_loader_; }
 
     void setMemoryLimit(size_t limit) noexcept { JS_SetMemoryLimit(rt_, limit); }
     void setMaxStackSize(size_t size)  noexcept { JS_SetMaxStackSize(rt_, size); }
     void runGC() noexcept { JS_RunGC(rt_); }
-    void setModuleLoader(JSModuleNormalizeFunc* normalize,
-                         JSModuleLoaderFunc* loader,
-                         void* opaque = nullptr) noexcept {
-        JS_SetModuleLoaderFunc(rt_, normalize, loader, opaque);
-    }
-
-    void setModuleLoader(ModuleLoader loader) {
-        if (loader) {
-            module_loader_ = std::move(loader);
-        } else {
-            module_loader_ = detail::default_module_loader_();
-        }
-        JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, this);
-    }
 };
 
 // ── Value ─────────────────────────────────────────────────────────────────────
@@ -399,7 +382,7 @@ public:
 
     explicit Context(Runtime& rt)
         : ctx_(JS_NewContext(rt.get())),
-          moduleLoader(rt.defaultModuleLoader()) {
+          moduleLoader(detail::default_module_loader_()) {
         if (!ctx_) throw Exception("Failed to create JSContext");
         JS_SetContextOpaque(ctx_, this);
     }
@@ -590,22 +573,17 @@ inline Module Context::newModule(const std::string& name) {
 inline JSModuleDef* detail::module_loader_dispatch_(JSContext* ctx,
                                                     const char* module_name,
                                                     void* opaque) {
-    auto* runtime = static_cast<Runtime*>(opaque);
     auto* context = static_cast<Context*>(JS_GetContextOpaque(ctx));
+    (void)opaque;
     if (!module_name)
         return nullptr;
 
-    const ModuleLoader* loader = nullptr;
-    if (context && context->moduleLoader) {
-        loader = &context->moduleLoader;
-    } else if (runtime) {
-        loader = &runtime->defaultModuleLoader();
-    }
-
     ModuleData data;
     try {
-        if (loader) {
-            data = (*loader)(module_name);
+        if (context && context->moduleLoader) {
+            data = context->moduleLoader(module_name);
+        } else {
+            data = detail::default_module_loader_()(module_name);
         }
     } catch (const std::exception& e) {
         JS_ThrowInternalError(ctx, "%s", e.what());

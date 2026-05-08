@@ -295,8 +295,6 @@ RAII owner of `JSRuntime`. Constructor throws `qjsb::Exception` on failure.
 | `setMemoryLimit(n)` | Limit JS heap size                  |
 | `setMaxStackSize(n)`| Limit JS stack                      |
 | `runGC()`           | Trigger garbage collection          |
-| `setModuleLoader(normalize, loader, opaque)` | Install raw QuickJS module loader |
-| `setModuleLoader(ModuleLoader)` | Override the default quickjspp-style loader callback used by contexts on this runtime |
 
 ### `qjsb::Context`
 RAII owner of `JSContext`.
