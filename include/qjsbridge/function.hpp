@@ -244,13 +244,13 @@ inline Module& Module::bindFunction(const std::string& name, Fn&& fn, int length
     return *this;
 }
 
-template <typename Fn,
-          std::enable_if_t<std::is_convertible_v<Fn, RawFunctionCallback>, int>>
-inline Module& Module::bindFunction(const std::string& name, Fn&& fn, int length) {
+template <typename RawFn,
+          std::enable_if_t<std::is_convertible_v<RawFn, RawFunctionCallback>, int>>
+inline Module& Module::bindFunction(const std::string& name, RawFn&& fn, int length) {
     if (!mod_) throw Exception("Invalid module");
     if (JS_AddModuleExport(ctx_, mod_, name.c_str()) < 0)
         throwJSException(ctx_);
-    RawFunctionCallback raw_fn(std::forward<Fn>(fn));
+    RawFunctionCallback raw_fn(std::forward<RawFn>(fn));
     state_->exports.push_back(detail::ModuleExport{
         name,
         [raw_fn = std::move(raw_fn), length](JSContext* ctx) mutable {

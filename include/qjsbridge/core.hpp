@@ -705,9 +705,9 @@ public:
     template <typename Fn,
               std::enable_if_t<!std::is_convertible_v<Fn, RawFunctionCallback>, int> = 0>
     Module& bindFunction(const std::string& name, Fn&& fn, int length = -1);
-    template <typename Fn,
-              std::enable_if_t<std::is_convertible_v<Fn, RawFunctionCallback>, int> = 0>
-    Module& bindFunction(const std::string& name, Fn&& fn, int length = -1);
+    template <typename RawFn,
+              std::enable_if_t<std::is_convertible_v<RawFn, RawFunctionCallback>, int> = 0>
+    Module& bindFunction(const std::string& name, RawFn&& fn, int length = -1);
     Module& bindFunctionRaw(const std::string& name,
                             RawFunctionCallback fn,
                             int length = -1);
