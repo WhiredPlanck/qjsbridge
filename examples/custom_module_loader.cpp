@@ -1,9 +1,9 @@
 // examples/custom_module_loader.cpp – custom module loader with in-memory sources
 
 #include <qjsbridge.hpp>
-#include <filesystem>
 #include <iostream>
-#include <optional>
+#include <string_view>
+#include <unordered_map>
 
 using namespace qjsb;
 
@@ -11,34 +11,55 @@ int main() {
     Runtime rt;
     Context ctx(rt);
 
-    ModuleLoader loader;
-    loader
-        .setNormalize([](JSContext*, const std::string& base, const std::string& name) {
-            if (name == "pkg") return std::string("virtual/pkg.mjs");
-            if (name == "./dep") {
-                const std::filesystem::path base_path(base);
-                const std::filesystem::path dir =
-                    base_path.has_parent_path() ? base_path.parent_path() : std::filesystem::path(".");
-                return (dir / "dep.mjs").generic_string();
-            }
-            return name;
-        })
-        .setSourceLoader([](JSContext*, const std::string& normalized_name)
-            -> std::optional<std::string> {
-            if (normalized_name == "virtual/pkg.mjs")
-                return std::string("import { n } from './dep'; export const value = n + 1;");
-            if (normalized_name == "virtual/dep.mjs")
-                return std::string("export const n = 41;");
-            return std::nullopt;
-        });
+    std::unordered_map<std::string, std::string> files = {
+        {
+            "some_module.js",
+            R"(
+                import "folder/file1.js";
+                log(import.meta.url);
+            )"
+        },
+        {
+            "folder/file1.js",
+            R"(
+                import "./file2.js";
+                log(import.meta.url);
+            )"
+        },
+        {
+            "folder/file2.js",
+            R"(
+                import "http://localhost/script1.js";
+                log(import.meta.url);
+            )"
+        },
+        {
+            "http://localhost/script1.js",
+            R"(
+                import "./script2.js";
+                log(import.meta.url);
+            )"
+        },
+        {
+            "http://localhost/script2.js",
+            R"(
+                log(import.meta.url);
+            )"
+        },
+    };
 
-    rt.setModuleLoader(std::move(loader));
+    ctx.moduleLoader = [&files](std::string_view filename) -> ModuleData {
+        auto it = files.find(std::string(filename));
+        if (it != files.end())
+            return ModuleData{detail::toUri(filename), it->second};
+        return {};
+    };
+    ctx.bindFunction("log", [](std::string_view msg) {
+        std::cout << msg << "\n";
+    });
 
     ctx.evalModule(R"(
-        import { value } from "pkg";
-        globalThis.msg = `custom module loader value=${value}`;
-    )", "loader_demo.mjs");
-
-    std::cout << ctx.eval("msg").toString() << "\n";
+        import "./some_module.js";
+    )", "<eval>");
     return 0;
 }

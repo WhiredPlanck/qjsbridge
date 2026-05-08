@@ -20,6 +20,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -51,79 +52,21 @@ public:
     explicit TypeError(const std::string& msg) : Exception("TypeError: " + msg) {}
 };
 
-/// High-level configurable QuickJS module loader.
-///
-/// Typical usage:
-///   1) configure normalize/source/file-read hooks on ModuleLoader
-///   2) install with Runtime::setModuleLoader(ModuleLoader)
-///   3) evaluate module code via Context::evalModule(...)
-///
-/// Compared with Runtime::setModuleLoader(JSModuleNormalizeFunc*, ...),
-/// this API is C++-friendly (std::function hooks) and keeps loader lifetime
-/// tied to Runtime to avoid dangling opaque pointers.
-class ModuleLoader {
-public:
-    using NormalizeFn = std::function<std::string(
-        JSContext* ctx,
-        const std::string& module_base_name,
-        const std::string& module_name)>;
+/// quickjspp-compatible module loader result.
+struct ModuleData {
+    std::optional<std::string> source;
+    std::optional<std::string> url;
 
-    using SourceLoaderFn = std::function<std::optional<std::string>(
-        JSContext* ctx,
-        const std::string& normalized_name)>;
-
-    using FileReaderFn = std::function<std::optional<std::string>(
-        const std::string& path)>;
-
-private:
-    NormalizeFn normalize_;
-    SourceLoaderFn source_loader_;
-    FileReaderFn file_reader_;
-    std::vector<std::string> search_paths_;
-    // "" means "try module name as-is (no extension)".
-    std::vector<std::string> extensions_{"", ".js", ".mjs"};
-
-public:
-    ModuleLoader() = default;
-
-    ModuleLoader& setNormalize(NormalizeFn fn) {
-        normalize_ = std::move(fn);
-        return *this;
-    }
-
-    ModuleLoader& setSourceLoader(SourceLoaderFn fn) {
-        source_loader_ = std::move(fn);
-        return *this;
-    }
-
-    ModuleLoader& setFileReader(FileReaderFn fn) {
-        file_reader_ = std::move(fn);
-        return *this;
-    }
-
-    ModuleLoader& addSearchPath(std::string path) {
-        search_paths_.push_back(std::move(path));
-        return *this;
-    }
-
-    ModuleLoader& clearSearchPaths() {
-        search_paths_.clear();
-        return *this;
-    }
-
-    ModuleLoader& setExtensions(std::vector<std::string> exts) {
-        extensions_ = std::move(exts);
-        if (extensions_.empty())
-            extensions_.push_back("");
-        return *this;
-    }
-
-    const NormalizeFn& normalize() const noexcept { return normalize_; }
-    const SourceLoaderFn& sourceLoader() const noexcept { return source_loader_; }
-    const FileReaderFn& fileReader() const noexcept { return file_reader_; }
-    const std::vector<std::string>& searchPaths() const noexcept { return search_paths_; }
-    const std::vector<std::string>& extensions() const noexcept { return extensions_; }
+    ModuleData() = default;
+    explicit ModuleData(std::optional<std::string> source_)
+        : source(std::move(source_)) {}
+    ModuleData(std::optional<std::string> url_,
+               std::optional<std::string> source_)
+        : source(std::move(source_)), url(std::move(url_)) {}
 };
+
+/// quickjspp-compatible module loader callback.
+using ModuleLoader = std::function<ModuleData(std::string_view)>;
 
 // ── JS_NewClassID compatibility shim ─────────────────────────────────────────
 // Original QuickJS:  JS_NewClassID(JSClassID *pclass_id)
@@ -140,20 +83,10 @@ namespace detail {
     }
 #endif
 
-inline std::string default_module_normalize_(const std::string& base_module_path,
-                                             const std::string& module_name) {
-    namespace fs = std::filesystem;
-    fs::path name(module_name);
-    if (module_name.rfind("./", 0) == 0 || module_name.rfind("../", 0) == 0) {
-        fs::path base(base_module_path);
-        fs::path base_dir = base.has_parent_path() ? base.parent_path() : fs::path(".");
-        return (base_dir / name).lexically_normal().generic_string();
-    }
-    return name.lexically_normal().generic_string();
-}
-
-inline std::optional<std::string> default_read_file_(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
+inline std::optional<std::string> readFile(const std::filesystem::path& filepath) {
+    if (!std::filesystem::exists(filepath))
+        return std::nullopt;
+    std::ifstream in(filepath, std::ios::in | std::ios::binary);
     if (!in.is_open())
         return std::nullopt;
     std::string content((std::istreambuf_iterator<char>(in)),
@@ -161,122 +94,32 @@ inline std::optional<std::string> default_read_file_(const std::string& path) {
     return content;
 }
 
-inline std::optional<std::string> module_loader_read_source_(
-    const ModuleLoader& loader,
-    const std::string& module_name) {
-    namespace fs = std::filesystem;
-    std::vector<fs::path> candidates;
-    fs::path requested(module_name);
-
-    auto append_with_extensions = [&](const fs::path& p) {
-        if (p.has_extension()) {
-            candidates.push_back(p);
-            return;
-        }
-        for (const auto& ext : loader.extensions()) {
-            if (ext.empty()) candidates.push_back(p);
-            else candidates.push_back(p.string() + ext);
-        }
-    };
-
-    append_with_extensions(requested);
-    for (const auto& root : loader.searchPaths()) {
-        append_with_extensions(fs::path(root) / requested);
+inline std::string toUri(std::string_view filename) {
+    auto name = std::string(filename);
+    const auto scheme_pos = name.find("://");
+    const auto slash_pos = name.find('/');
+    if (scheme_pos != std::string::npos &&
+        (slash_pos == std::string::npos || scheme_pos < slash_pos)) {
+        return name;
     }
 
-    for (const auto& candidate : candidates) {
-        std::optional<std::string> src;
-        if (loader.fileReader()) {
-            src = loader.fileReader()(candidate.generic_string());
-        } else {
-            src = default_read_file_(candidate.generic_string());
-        }
-        if (src) return src;
+    auto path = std::filesystem::path(name);
+    if (!path.is_absolute()) {
+        path = std::filesystem::current_path() / path;
     }
-    return std::nullopt;
+    path = std::filesystem::weakly_canonical(path);
+    return "file://" + path.generic_string();
 }
 
-inline char* module_loader_normalize_dispatch_(JSContext* ctx,
-                                               const char* module_base_name,
-                                               const char* module_name,
-                                               void* opaque) {
-    auto* loader = static_cast<ModuleLoader*>(opaque);
-    if (!loader || !module_name)
-        return nullptr;
-
-    std::string normalized;
-    try {
-        if (loader->normalize()) {
-            normalized = loader->normalize()(
-                ctx,
-                module_base_name ? module_base_name : "",
-                module_name);
-        } else {
-            normalized = default_module_normalize_(
-                module_base_name ? module_base_name : "",
-                module_name);
-        }
-    } catch (const std::exception& e) {
-        JS_ThrowInternalError(ctx, "module normalize failed: %s", e.what());
-        return nullptr;
-    } catch (...) {
-        JS_ThrowInternalError(ctx, "module normalize failed");
-        return nullptr;
-    }
-
-    char* out = static_cast<char*>(js_malloc(ctx, normalized.size() + 1));
-    if (!out) return nullptr;
-    std::memcpy(out, normalized.c_str(), normalized.size());
-    out[normalized.size()] = '\0';
-    return out;
+inline ModuleLoader default_module_loader_() {
+    return [](std::string_view filename) -> ModuleData {
+        return ModuleData{toUri(filename), readFile(std::string(filename))};
+    };
 }
 
 inline JSModuleDef* module_loader_dispatch_(JSContext* ctx,
                                             const char* module_name,
-                                            void* opaque) {
-    auto* loader = static_cast<ModuleLoader*>(opaque);
-    if (!loader || !module_name)
-        return nullptr;
-
-    std::optional<std::string> source;
-    try {
-        if (loader->sourceLoader()) {
-            source = loader->sourceLoader()(ctx, module_name);
-        } else {
-            source = module_loader_read_source_(*loader, module_name);
-        }
-    } catch (const std::exception& e) {
-        JS_ThrowInternalError(ctx, "module loader failed: %s", e.what());
-        return nullptr;
-    } catch (...) {
-        JS_ThrowInternalError(ctx, "module loader failed");
-        return nullptr;
-    }
-
-    if (!source) {
-        JS_ThrowReferenceError(
-            ctx,
-            "Could not load module '%s' (no source loader configured or source loader returned empty, and filesystem lookup failed)",
-            module_name);
-        return nullptr;
-    }
-
-    JSValue func_val = JS_Eval(ctx,
-                               source->c_str(),
-                               source->size(),
-                               module_name,
-                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-    if (JS_IsException(func_val))
-        return nullptr;
-
-    if (JS_VALUE_GET_TAG(func_val) != JS_TAG_MODULE) {
-        JS_FreeValue(ctx, func_val);
-        JS_ThrowTypeError(ctx, "Loaded script is not a module: '%s'", module_name);
-        return nullptr;
-    }
-
-    return static_cast<JSModuleDef*>(JS_VALUE_GET_PTR(func_val));
-}
+                                            void* opaque);
 
 struct ModuleExport {
     std::string name;
@@ -317,27 +160,39 @@ inline int module_init_dispatch(JSContext* ctx, JSModuleDef* m) {
 /// RAII owner of a JSRuntime.
 class Runtime {
     JSRuntime* rt_;
-    std::unique_ptr<ModuleLoader> module_loader_;
+    ModuleLoader module_loader_{detail::default_module_loader_()};
 public:
     Runtime() : rt_(JS_NewRuntime()) {
         if (!rt_) throw Exception("Failed to create JSRuntime");
+        JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, this);
     }
     ~Runtime() noexcept { if (rt_) JS_FreeRuntime(rt_); }
 
     Runtime(const Runtime&)            = delete;
     Runtime& operator=(const Runtime&) = delete;
 
-    Runtime(Runtime&& o) noexcept : rt_(o.rt_) { o.rt_ = nullptr; }
+    Runtime(Runtime&& o) noexcept
+        : rt_(o.rt_), module_loader_(std::move(o.module_loader_)) {
+        o.rt_ = nullptr;
+        if (rt_) {
+            JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, this);
+        }
+    }
     Runtime& operator=(Runtime&& o) noexcept {
         if (this != &o) {
             if (rt_) JS_FreeRuntime(rt_);
             rt_ = o.rt_;
+            module_loader_ = std::move(o.module_loader_);
             o.rt_ = nullptr;
+            if (rt_) {
+                JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, this);
+            }
         }
         return *this;
     }
 
     JSRuntime* get() const noexcept { return rt_; }
+    const ModuleLoader& defaultModuleLoader() const noexcept { return module_loader_; }
 
     void setMemoryLimit(size_t limit) noexcept { JS_SetMemoryLimit(rt_, limit); }
     void setMaxStackSize(size_t size)  noexcept { JS_SetMaxStackSize(rt_, size); }
@@ -345,16 +200,12 @@ public:
     void setModuleLoader(JSModuleNormalizeFunc* normalize,
                          JSModuleLoaderFunc* loader,
                          void* opaque = nullptr) noexcept {
-        module_loader_.reset();
         JS_SetModuleLoaderFunc(rt_, normalize, loader, opaque);
     }
 
     void setModuleLoader(ModuleLoader loader) {
-        module_loader_ = std::make_unique<ModuleLoader>(std::move(loader));
-        JS_SetModuleLoaderFunc(rt_,
-                               detail::module_loader_normalize_dispatch_,
-                               detail::module_loader_dispatch_,
-                               module_loader_.get());
+        module_loader_ = loader ? std::move(loader) : detail::default_module_loader_();
+        JS_SetModuleLoaderFunc(rt_, nullptr, detail::module_loader_dispatch_, this);
     }
 };
 
@@ -540,17 +391,33 @@ class Context {
     }
 
 public:
+    ModuleLoader moduleLoader;
+
     explicit Context(Runtime& rt) : ctx_(JS_NewContext(rt.get())) {
         if (!ctx_) throw Exception("Failed to create JSContext");
+        JS_SetContextOpaque(ctx_, this);
     }
     explicit Context(JSRuntime* rt) : ctx_(JS_NewContext(rt)) {
         if (!ctx_) throw Exception("Failed to create JSContext");
+        JS_SetContextOpaque(ctx_, this);
+        moduleLoader = detail::default_module_loader_();
     }
-    ~Context() noexcept { if (ctx_) JS_FreeContext(ctx_); }
+    ~Context() noexcept {
+        if (ctx_) {
+            JS_SetContextOpaque(ctx_, nullptr);
+            JS_FreeContext(ctx_);
+        }
+    }
 
     Context(const Context&)            = delete;
     Context& operator=(const Context&) = delete;
-    Context(Context&& o) noexcept : ctx_(o.ctx_) { o.ctx_ = nullptr; }
+    Context(Context&& o) noexcept
+        : ctx_(o.ctx_), moduleLoader(std::move(o.moduleLoader)) {
+        o.ctx_ = nullptr;
+        if (ctx_) {
+            JS_SetContextOpaque(ctx_, this);
+        }
+    }
 
     JSContext* get() const noexcept { return ctx_; }
 
@@ -712,6 +579,77 @@ public:
 
 inline Module Context::newModule(const std::string& name) {
     return Module(ctx_, name);
+}
+
+inline JSModuleDef* detail::module_loader_dispatch_(JSContext* ctx,
+                                                    const char* module_name,
+                                                    void* opaque) {
+    auto* runtime = static_cast<Runtime*>(opaque);
+    auto* context = static_cast<Context*>(JS_GetContextOpaque(ctx));
+    if (!module_name)
+        return nullptr;
+
+    const ModuleLoader* loader = nullptr;
+    if (context && context->moduleLoader) {
+        loader = &context->moduleLoader;
+    } else if (runtime && runtime->defaultModuleLoader()) {
+        loader = &runtime->defaultModuleLoader();
+    }
+
+    ModuleData data;
+    try {
+        if (loader && *loader) {
+            data = (*loader)(module_name);
+        }
+    } catch (const std::exception& e) {
+        JS_ThrowInternalError(ctx, "%s", e.what());
+        return nullptr;
+    } catch (...) {
+        JS_ThrowInternalError(ctx, "Unknown error");
+        return nullptr;
+    }
+
+    if (!data.source) {
+        JS_ThrowReferenceError(ctx,
+                               "could not load module filename '%s'",
+                               module_name);
+        return nullptr;
+    }
+    if (!data.url) {
+        data.url = std::string(module_name);
+    }
+
+    JSValue func_val = JS_Eval(ctx,
+                               data.source->c_str(),
+                               data.source->size(),
+                               module_name,
+                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    if (JS_IsException(func_val))
+        return nullptr;
+    if (JS_VALUE_GET_TAG(func_val) != JS_TAG_MODULE) {
+        JS_FreeValue(ctx, func_val);
+        JS_ThrowTypeError(ctx, "Loaded script is not a module: '%s'", module_name);
+        return nullptr;
+    }
+
+    auto* module = static_cast<JSModuleDef*>(JS_VALUE_GET_PTR(func_val));
+    JSValue meta = JS_GetImportMeta(ctx, module);
+    if (JS_IsException(meta))
+        return nullptr;
+
+    if (JS_SetPropertyStr(ctx,
+                          meta,
+                          "url",
+                          JS_NewStringLen(ctx, data.url->c_str(), data.url->size())) < 0) {
+        JS_FreeValue(ctx, meta);
+        return nullptr;
+    }
+    if (JS_SetPropertyStr(ctx, meta, "main", JS_NewBool(ctx, false)) < 0) {
+        JS_FreeValue(ctx, meta);
+        return nullptr;
+    }
+    JS_FreeValue(ctx, meta);
+    return module;
 }
 
 } // namespace qjsb

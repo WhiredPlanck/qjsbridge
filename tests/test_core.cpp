@@ -3,6 +3,9 @@
 #include <cassert>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 using namespace qjsb;
 
@@ -113,65 +116,87 @@ static void test_runtime_gc() {
     rt.runGC();   // Should not crash.
 }
 
-static void test_custom_module_loader_with_source_loader() {
+static void test_default_module_loader_reports_missing_module() {
     Runtime rt;
     Context ctx(rt);
 
-    ModuleLoader loader;
-    loader
-        .setNormalize([](JSContext*, const std::string& base, const std::string& name) {
-            if (name == "pkg") return std::string("virtual/pkg.mjs");
-            if (name == "./dep") {
-                const auto pos = base.find_last_of('/');
-                const std::string dir = (pos == std::string::npos) ? "" : base.substr(0, pos + 1);
-                return dir + "dep.mjs";
-            }
-            return name;
-        })
-        .setSourceLoader([](JSContext*, const std::string& normalized_name)
-            -> std::optional<std::string> {
-            if (normalized_name == "virtual/pkg.mjs")
-                return std::string("import { n } from './dep'; export const answer = n + 1;");
-            if (normalized_name == "virtual/dep.mjs")
-                return std::string("export const n = 41;");
-            return std::nullopt;
-        });
-    rt.setModuleLoader(std::move(loader));
-
-    ctx.evalModule(R"(
-        import { answer } from "pkg";
-        globalThis.loaderAnswer = answer;
-    )", "loader_entry.mjs");
-
-    Value v = ctx.eval("loaderAnswer");
-    int32_t n = 0;
-    JS_ToInt32(ctx.get(), &n, v.get());
-    assert(n == 42);
+    bool caught = false;
+    try {
+        ctx.eval(R"(
+            import "./invalid_module.js";
+        )", "<eval>", JS_EVAL_TYPE_MODULE);
+    } catch (const JSException& e) {
+        caught = true;
+        assert(std::string(e.what()) ==
+               "ReferenceError: could not load module filename 'invalid_module.js'");
+    }
+    assert(caught);
 }
 
-static void test_custom_module_loader_with_file_reader() {
+static void test_quickjspp_style_module_loader() {
     Runtime rt;
     Context ctx(rt);
 
-    ModuleLoader loader;
-    loader
-        .addSearchPath("/virtual")
-        .setFileReader([](const std::string& path) -> std::optional<std::string> {
-            if (path == "/virtual/math.js")
-                return std::string("export const seven = 7;");
-            return std::nullopt;
-        });
-    rt.setModuleLoader(std::move(loader));
+    std::unordered_map<std::string, std::string> files = {
+        {
+            "some_module.js",
+            R"(
+                import "folder/file1.js";
+                log(import.meta.url);
+            )"
+        },
+        {
+            "folder/file1.js",
+            R"(
+                import "./file2.js";
+                log(import.meta.url);
+            )"
+        },
+        {
+            "folder/file2.js",
+            R"(
+                import "http://localhost/script1.js";
+                log(import.meta.url);
+            )"
+        },
+        {
+            "http://localhost/script1.js",
+            R"(
+                import "./script2.js";
+                log(import.meta.url);
+            )"
+        },
+        {
+            "http://localhost/script2.js",
+            R"(
+                log(import.meta.url);
+            )"
+        },
+    };
+    std::vector<std::string> logged_urls;
 
-    ctx.evalModule(R"(
-        import { seven } from "math";
-        globalThis.loaderSeven = seven;
-    )", "loader_file_entry.mjs");
+    ctx.moduleLoader = [&files](std::string_view filename) -> ModuleData {
+        auto it = files.find(std::string(filename));
+        if (it != files.end())
+            return ModuleData{detail::toUri(filename), it->second};
+        return {};
+    };
+    ctx.bindFunction("log", [&logged_urls](std::string s) {
+        logged_urls.push_back(std::move(s));
+    });
 
-    Value v = ctx.eval("loaderSeven");
-    int32_t n = 0;
-    JS_ToInt32(ctx.get(), &n, v.get());
-    assert(n == 7);
+    ctx.eval(R"(
+        import "./some_module.js";
+    )", "<eval>", JS_EVAL_TYPE_MODULE);
+
+    const std::vector<std::string> expected = {
+        detail::toUri("some_module.js"),
+        detail::toUri("folder/file1.js"),
+        detail::toUri("folder/file2.js"),
+        "http://localhost/script1.js",
+        "http://localhost/script2.js",
+    };
+    assert(logged_urls == expected);
 }
 
 int main() {
@@ -185,7 +210,7 @@ int main() {
     test_value_property_access();
     test_value_array_length();
     test_runtime_gc();
-    test_custom_module_loader_with_source_loader();
-    test_custom_module_loader_with_file_reader();
+    test_default_module_loader_reports_missing_module();
+    test_quickjspp_style_module_loader();
     return 0;
 }
