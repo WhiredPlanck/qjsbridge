@@ -393,7 +393,9 @@ class Context {
 public:
     ModuleLoader moduleLoader;
 
-    explicit Context(Runtime& rt) : ctx_(JS_NewContext(rt.get())) {
+    explicit Context(Runtime& rt)
+        : ctx_(JS_NewContext(rt.get())),
+          moduleLoader(rt.defaultModuleLoader()) {
         if (!ctx_) throw Exception("Failed to create JSContext");
         JS_SetContextOpaque(ctx_, this);
     }
@@ -592,13 +594,13 @@ inline JSModuleDef* detail::module_loader_dispatch_(JSContext* ctx,
     const ModuleLoader* loader = nullptr;
     if (context && context->moduleLoader) {
         loader = &context->moduleLoader;
-    } else if (runtime && runtime->defaultModuleLoader()) {
+    } else if (runtime) {
         loader = &runtime->defaultModuleLoader();
     }
 
     ModuleData data;
     try {
-        if (loader && *loader) {
+        if (loader) {
             data = (*loader)(module_name);
         }
     } catch (const std::exception& e) {
