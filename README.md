@@ -12,6 +12,7 @@ A lightweight, header-only C++17 binding library that bridges
 - **Function binding** – free functions, lambdas, capturing closures
 - **Module binding** – export C++ functions/classes as ES modules and import via
   `import { ... } from "module"`
+- **Custom module loader** – configurable normalize/load/file-read hooks
 - **Class binding** – constructors, member methods, data fields, static
   methods, read-only properties, custom getter/setter pairs
 - **Ownership models** – owned (`T*`), borrowed (`const T*`), and
@@ -92,6 +93,26 @@ ctx.evalModule(R"(
   import { add } from "math_ext";
   globalThis.result = add(20, 22);
 )", "entry.mjs");
+```
+
+### Custom module loader (in-memory / custom file read)
+
+```cpp
+qjsb::ModuleLoader loader;
+loader
+  .setNormalize([](JSContext*, const std::string& base, const std::string& name) {
+      if (name == "pkg") return std::string("virtual/pkg.mjs");
+      if (name == "./dep") return std::string("virtual/dep.mjs");
+      return name;
+  })
+  .setSourceLoader([](JSContext*, const std::string& id) -> std::optional<std::string> {
+      if (id == "virtual/pkg.mjs") return "import { n } from './dep'; export const x = n + 1;";
+      if (id == "virtual/dep.mjs") return "export const n = 41;";
+      return std::nullopt;
+  });
+
+rt.setModuleLoader(std::move(loader));
+ctx.evalModule(R"(import { x } from "pkg"; globalThis.result = x;)", "entry.mjs");
 ```
 
 ---
@@ -239,6 +260,7 @@ RAII owner of `JSRuntime`. Constructor throws `qjsb::Exception` on failure.
 | `setMaxStackSize(n)`| Limit JS stack                      |
 | `runGC()`           | Trigger garbage collection          |
 | `setModuleLoader(normalize, loader, opaque)` | Install custom QuickJS module loader |
+| `setModuleLoader(ModuleLoader)` | Install high-level configurable module loader |
 
 ### `qjsb::Context`
 RAII owner of `JSContext`.
@@ -291,6 +313,16 @@ Owning RAII wrapper for `JSValue`.
 | `bindFunction(name, fn, length?)`      | Export callable from module              |
 | `exportValue(name, value)`             | Export existing JS value                 |
 | `get()`                                | Raw `JSModuleDef*`                       |
+
+### `qjsb::ModuleLoader`
+
+| Method | Description |
+|--------|-------------|
+| `setNormalize(fn)` | Custom module name normalization (`base`,`name` → normalized id) |
+| `setSourceLoader(fn)` | Custom source loader (`normalized id` → JS source) |
+| `setFileReader(fn)` | Custom file reader used by default filesystem loading |
+| `addSearchPath(path)` | Add search path for filesystem loading |
+| `setExtensions(exts)` | Extensions tried when resolving filesystem modules |
 
 ### Free helpers
 

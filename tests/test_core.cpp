@@ -1,6 +1,7 @@
 // test_core.cpp – tests for Runtime, Context, and Value RAII wrappers
 #include <qjsbridge.hpp>
 #include <cassert>
+#include <optional>
 #include <string>
 
 using namespace qjsb;
@@ -112,6 +113,67 @@ static void test_runtime_gc() {
     rt.runGC();   // Should not crash.
 }
 
+static void test_custom_module_loader_with_source_loader() {
+    Runtime rt;
+    Context ctx(rt);
+
+    ModuleLoader loader;
+    loader
+        .setNormalize([](JSContext*, const std::string& base, const std::string& name) {
+            if (name == "pkg") return std::string("virtual/pkg.mjs");
+            if (name == "./dep") {
+                const auto pos = base.find_last_of('/');
+                const std::string dir = (pos == std::string::npos) ? "" : base.substr(0, pos + 1);
+                return dir + "dep.mjs";
+            }
+            return name;
+        })
+        .setSourceLoader([](JSContext*, const std::string& normalized_name)
+            -> std::optional<std::string> {
+            if (normalized_name == "virtual/pkg.mjs")
+                return std::string("import { n } from './dep'; export const answer = n + 1;");
+            if (normalized_name == "virtual/dep.mjs")
+                return std::string("export const n = 41;");
+            return std::nullopt;
+        });
+    rt.setModuleLoader(std::move(loader));
+
+    ctx.evalModule(R"(
+        import { answer } from "pkg";
+        globalThis.loaderAnswer = answer;
+    )", "loader_entry.mjs");
+
+    Value v = ctx.eval("loaderAnswer");
+    int32_t n = 0;
+    JS_ToInt32(ctx.get(), &n, v.get());
+    assert(n == 42);
+}
+
+static void test_custom_module_loader_with_file_reader() {
+    Runtime rt;
+    Context ctx(rt);
+
+    ModuleLoader loader;
+    loader
+        .addSearchPath("/virtual")
+        .setFileReader([](const std::string& path) -> std::optional<std::string> {
+            if (path == "/virtual/math.js")
+                return std::string("export const seven = 7;");
+            return std::nullopt;
+        });
+    rt.setModuleLoader(std::move(loader));
+
+    ctx.evalModule(R"(
+        import { seven } from "math";
+        globalThis.loaderSeven = seven;
+    )", "loader_file_entry.mjs");
+
+    Value v = ctx.eval("loaderSeven");
+    int32_t n = 0;
+    JS_ToInt32(ctx.get(), &n, v.get());
+    assert(n == 7);
+}
+
 int main() {
     test_runtime_context_creation();
     test_eval_returns_value();
@@ -123,5 +185,7 @@ int main() {
     test_value_property_access();
     test_value_array_length();
     test_runtime_gc();
+    test_custom_module_loader_with_source_loader();
+    test_custom_module_loader_with_file_reader();
     return 0;
 }
