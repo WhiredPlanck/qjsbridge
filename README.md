@@ -345,7 +345,7 @@ Owning RAII wrapper for `JSValue`.
 
 | Method                                 | Description                              |
 |----------------------------------------|------------------------------------------|
-| `bindFunction(name, fn, length?)`      | Export callable from module (typed callable or raw callback `ctx,this,argc,argv`) |
+| `bindFunction(name, fn, length?)`      | Export callable from module (typed callable or raw callback `ctx,this_val,argc,argv`) |
 | `exportValue(name, value)`             | Export existing JS value                 |
 | `get()`                                | Raw `JSModuleDef*`                       |
 
