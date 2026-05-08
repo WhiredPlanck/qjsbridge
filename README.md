@@ -227,7 +227,7 @@ qjsb::ClassDef<Vec2>(ctx, "Vec2")
 // Manual overload dispatch on instance methods:
 qjsb::ClassDef<MyClass>(ctx, "MyClass")
     .constructor<>()
-    .rawMethod("set", [](JSContext* ctx, MyClass* self, int argc, JSValueConst* argv) -> JSValue {
+    .method("set", [](JSContext* ctx, MyClass* self, int argc, JSValueConst* argv) -> JSValue {
         if (argc == 1 && JS_IsNumber(argv[0])) { /* self->set(int) */ }
         if (argc == 1 && JS_IsString(argv[0])) { /* self->set(std::string) */ }
         return JS_ThrowTypeError(ctx, "No matching overload");
@@ -331,8 +331,7 @@ Owning RAII wrapper for `JSValue`.
 | Method                              | Description                               |
 |-------------------------------------|-------------------------------------------|
 | `constructor<Args...>()`            | Register constructor with given argument types |
-| `method(name, fn)`                  | Instance method (member ptr or free fn)   |
-| `rawMethod(name, fn, length?)`      | Raw instance callback (`ctx,self,argc,argv`) |
+| `method(name, fn)`                  | Instance method (member ptr, free fn, or raw callback `ctx,self,argc,argv`) |
 | `field(name, member_ptr)`           | Direct field with auto getter+setter      |
 | `property(name, getter)`            | Getter-only property                       |
 | `property(name, getter, setter)`    | Read-write property                        |
