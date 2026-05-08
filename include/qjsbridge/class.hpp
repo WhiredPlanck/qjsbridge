@@ -400,7 +400,8 @@ public:
     // Free function / lambda whose first parameter is T* (or const T*).
     template <typename Fn,
               std::enable_if_t<
-                  !std::is_member_function_pointer_v<std::decay_t<Fn>>,
+                  !std::is_member_function_pointer_v<std::decay_t<Fn>> &&
+                  !std::is_convertible_v<Fn, RawMethodCallback>,
                   int> = 0>
     ClassDef& method(const char* name, Fn&& fn) {
         using Traits = detail::function_traits<std::decay_t<Fn>>;
@@ -416,13 +417,22 @@ public:
     /// Low-level method callback:
     ///   fn(ctx, self, argc, argv) -> JSValue
     /// Useful for manual overload dispatch by checking argc/argument types.
+    template <typename Fn,
+              std::enable_if_t<std::is_convertible_v<Fn, RawMethodCallback>, int> = 0>
+    ClassDef& method(const char* name, Fn&& fn, int length = -1) {
+        int js_arity = (length >= 0) ? length : 0;
+        auto* cb = new detail::RawMethodCallable<T>(RawMethodCallback(std::forward<Fn>(fn)));
+        JS_SetPropertyStr(ctx_, proto_, name, make_fn_(cb, js_arity));
+        return *this;
+    }
+
+    /// Low-level method callback:
+    ///   fn(ctx, self, argc, argv) -> JSValue
+    /// Useful for manual overload dispatch by checking argc/argument types.
     ClassDef& rawMethod(const char* name,
                         RawMethodCallback fn,
                         int length = -1) {
-        int js_arity = (length >= 0) ? length : 0;
-        auto* cb = new detail::RawMethodCallable<T>(std::move(fn));
-        JS_SetPropertyStr(ctx_, proto_, name, make_fn_(cb, js_arity));
-        return *this;
+        return method(name, std::move(fn), length);
     }
 
     // ── Data fields (auto getter+setter via JS accessors) ─────────────────────

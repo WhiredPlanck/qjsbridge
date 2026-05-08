@@ -302,10 +302,10 @@ static void test_raw_method_manual_overload_dispatch() {
 
     ClassDef<OverloadDemo>(ctx, "OverloadDemo")
         .constructor<>()
-        .rawMethod("set", [](JSContext* js,
-                             OverloadDemo* self,
-                             int argc,
-                             JSValueConst* argv) -> JSValue {
+        .method("set", [](JSContext* js,
+                          OverloadDemo* self,
+                          int argc,
+                          JSValueConst* argv) -> JSValue {
             if (argc == 1 && JS_IsNumber(argv[0])) {
                 int32_t x = 0;
                 JS_ToInt32(js, &x, argv[0]);
