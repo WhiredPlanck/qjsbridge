@@ -12,7 +12,7 @@ A lightweight, header-only C++17 binding library that bridges
 - **Function binding** – free functions, lambdas, capturing closures
 - **Module binding** – export C++ functions/classes as ES modules and import via
   `import { ... } from "module"`
-- **Custom module loader** – configurable normalize/load/file-read hooks
+- **Custom module loader** – quickjspp-style callback with `import.meta.url` support
 - **Class binding** – constructors, member methods, data fields, static
   methods, read-only properties, custom getter/setter pairs
 - **Ownership models** – owned (`T*`), borrowed (`const T*`), and
@@ -98,21 +98,23 @@ ctx.evalModule(R"(
 ### Custom module loader (in-memory / custom file read)
 
 ```cpp
-qjsb::ModuleLoader loader;
-loader
-  .setNormalize([](JSContext*, const std::string& base, const std::string& name) {
-      if (name == "pkg") return std::string("virtual/pkg.mjs");
-      if (name == "./dep") return std::string("virtual/dep.mjs");
-      return name;
-  })
-  .setSourceLoader([](JSContext*, const std::string& id) -> std::optional<std::string> {
-      if (id == "virtual/pkg.mjs") return "import { n } from './dep'; export const x = n + 1;";
-      if (id == "virtual/dep.mjs") return "export const n = 41;";
-      return std::nullopt;
-  });
+std::unordered_map<std::string, std::string> files = {
+  {"some_module.js", R"(import "folder/file1.js"; log(import.meta.url);)"},
+  {"folder/file1.js", R"(import "./file2.js"; log(import.meta.url);)"},
+  {"folder/file2.js", R"(import "http://localhost/script1.js"; log(import.meta.url);)"},
+  {"http://localhost/script1.js", R"(import "./script2.js"; log(import.meta.url);)"},
+  {"http://localhost/script2.js", R"(log(import.meta.url);)"},
+};
 
-rt.setModuleLoader(std::move(loader));
-ctx.evalModule(R"(import { x } from "pkg"; globalThis.result = x;)", "entry.mjs");
+ctx.moduleLoader = [&files](std::string_view filename) -> qjsb::ModuleData {
+  auto it = files.find(std::string(filename));
+  if (it != files.end())
+    return { qjsb::detail::toUri(filename), it->second };
+  return {};
+};
+
+ctx.bindFunction("log", [](std::string_view s) { std::cout << s << "\n"; });
+ctx.eval(R"(import "./some_module.js";)", "<eval>", JS_EVAL_TYPE_MODULE);
 ```
 
 ---
@@ -293,8 +295,8 @@ RAII owner of `JSRuntime`. Constructor throws `qjsb::Exception` on failure.
 | `setMemoryLimit(n)` | Limit JS heap size                  |
 | `setMaxStackSize(n)`| Limit JS stack                      |
 | `runGC()`           | Trigger garbage collection          |
-| `setModuleLoader(normalize, loader, opaque)` | Install custom QuickJS module loader |
-| `setModuleLoader(ModuleLoader)` | Install high-level configurable module loader |
+| `setModuleLoader(normalize, loader, opaque)` | Install raw QuickJS module loader |
+| `setModuleLoader(ModuleLoader)` | Override the default quickjspp-style loader callback used by contexts on this runtime |
 
 ### `qjsb::Context`
 RAII owner of `JSContext`.
@@ -310,6 +312,7 @@ RAII owner of `JSContext`.
 | `bindFunctionRaw(name, fn, length?)` | Alias for `bindFunction` with a raw callback (backward compatibility) |
 | `newModule(name)`                  | Create a C module for ES `import` exports |
 | `evalModule(code, filename?)`      | Evaluate module code (`JS_EVAL_TYPE_MODULE`) |
+| `moduleLoader`                     | quickjspp-style loader callback (`std::string_view` → `ModuleData`) |
 | `get()`                            | Raw `JSContext*`                         |
 
 ### `qjsb::Value`
@@ -351,13 +354,21 @@ Owning RAII wrapper for `JSValue`.
 
 ### `qjsb::ModuleLoader`
 
-| Method | Description |
+Alias of `std::function<qjsb::ModuleData(std::string_view)>`.
+
+### `qjsb::ModuleData`
+
+| Member | Description |
 |--------|-------------|
-| `setNormalize(fn)` | Custom module name normalization (`base`,`name` → normalized id) |
-| `setSourceLoader(fn)` | Custom source loader (`normalized id` → JS source) |
-| `setFileReader(fn)` | Custom file reader used by default filesystem loading |
-| `addSearchPath(path)` | Add search path for filesystem loading |
-| `setExtensions(exts)` | Extensions tried when resolving filesystem modules |
+| `source` | Module source code; `nullopt` causes `ReferenceError` |
+| `url` | Value assigned to `import.meta.url`; defaults to the normalized module name when omitted |
+
+### Module loader helpers
+
+| Helper | Description |
+|--------|-------------|
+| `qjsb::detail::readFile(path)` | Read a file into `std::optional<std::string>` |
+| `qjsb::detail::toUri(filename)` | Convert filesystem-like names to canonical `file://` URLs and preserve existing URI schemes |
 
 ### Free helpers
 
