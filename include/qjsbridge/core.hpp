@@ -79,6 +79,7 @@ private:
     SourceLoaderFn source_loader_;
     FileReaderFn file_reader_;
     std::vector<std::string> search_paths_;
+    // "" means "try module name as-is (no extension)".
     std::vector<std::string> extensions_{"", ".js", ".mjs"};
 
 public:
@@ -254,7 +255,7 @@ inline JSModuleDef* module_loader_dispatch_(JSContext* ctx,
     if (!source) {
         JS_ThrowReferenceError(
             ctx,
-            "Could not load module '%s' (source loader returned empty and filesystem lookup failed)",
+            "Could not load module '%s' (no source loader configured or source loader returned empty, and filesystem lookup failed)",
             module_name);
         return nullptr;
     }
