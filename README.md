@@ -114,7 +114,7 @@ ctx.moduleLoader = [&files](std::string_view filename) -> qjsb::ModuleData {
 };
 
 ctx.bindFunction("log", [](std::string_view s) { std::cout << s << "\n"; });
-ctx.eval(R"(import "./some_module.js";)", "<eval>", JS_EVAL_TYPE_MODULE);
+ctx.evalModule(R"(import "./some_module.js";)", "<eval>");
 ```
 
 ---
