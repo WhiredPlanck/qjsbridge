@@ -229,7 +229,8 @@ inline void Context::bindFunctionRaw(const std::string& name,
     JS_FreeValue(ctx_, g);
 }
 
-template <typename Fn>
+template <typename Fn,
+          std::enable_if_t<!std::is_convertible_v<Fn, RawFunctionCallback>, int>>
 inline Module& Module::bindFunction(const std::string& name, Fn&& fn, int length) {
     if (!mod_) throw Exception("Invalid module");
     if (JS_AddModuleExport(ctx_, mod_, name.c_str()) < 0)
@@ -243,19 +244,26 @@ inline Module& Module::bindFunction(const std::string& name, Fn&& fn, int length
     return *this;
 }
 
-inline Module& Module::bindFunctionRaw(const std::string& name,
-                                       RawFunctionCallback fn,
-                                       int length) {
+template <typename Fn,
+          std::enable_if_t<std::is_convertible_v<Fn, RawFunctionCallback>, int>>
+inline Module& Module::bindFunction(const std::string& name, Fn&& fn, int length) {
     if (!mod_) throw Exception("Invalid module");
     if (JS_AddModuleExport(ctx_, mod_, name.c_str()) < 0)
         throwJSException(ctx_);
+    RawFunctionCallback raw_fn(std::forward<Fn>(fn));
     state_->exports.push_back(detail::ModuleExport{
         name,
-        [fn = std::move(fn), length](JSContext* ctx) mutable {
-            return detail::make_raw_js_function_(ctx, fn, length);
+        [raw_fn = std::move(raw_fn), length](JSContext* ctx) mutable {
+            return detail::make_raw_js_function_(ctx, raw_fn, length);
         }
     });
     return *this;
+}
+
+inline Module& Module::bindFunctionRaw(const std::string& name,
+                                       RawFunctionCallback fn,
+                                       int length) {
+    return bindFunction(name, std::move(fn), length);
 }
 
 } // namespace qjsb

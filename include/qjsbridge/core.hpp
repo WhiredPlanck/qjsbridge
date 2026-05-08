@@ -20,6 +20,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -701,7 +702,11 @@ public:
         return *this;
     }
 
-    template <typename Fn>
+    template <typename Fn,
+              std::enable_if_t<!std::is_convertible_v<Fn, RawFunctionCallback>, int> = 0>
+    Module& bindFunction(const std::string& name, Fn&& fn, int length = -1);
+    template <typename Fn,
+              std::enable_if_t<std::is_convertible_v<Fn, RawFunctionCallback>, int> = 0>
     Module& bindFunction(const std::string& name, Fn&& fn, int length = -1);
     Module& bindFunctionRaw(const std::string& name,
                             RawFunctionCallback fn,
