@@ -525,6 +525,11 @@ inline std::string extractExceptionMessage(JSContext* ctx) {
 }
 
 class Module;
+using RawFunctionCallback = std::function<JSValue(
+    JSContext*,
+    JSValueConst,
+    int,
+    JSValueConst*)>;
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
@@ -610,6 +615,9 @@ public:
     // ── Function binding (implemented in function.hpp) ────────────────────────
     template <typename Fn>
     void bindFunction(const std::string& name, Fn&& fn, int length = -1);
+    void bindFunctionRaw(const std::string& name,
+                         RawFunctionCallback fn,
+                         int length = -1);
 
     /// Create a C module object for exporting C++ bindings to JS modules.
     Module newModule(const std::string& name);
@@ -695,6 +703,9 @@ public:
 
     template <typename Fn>
     Module& bindFunction(const std::string& name, Fn&& fn, int length = -1);
+    Module& bindFunctionRaw(const std::string& name,
+                            RawFunctionCallback fn,
+                            int length = -1);
 };
 
 inline Module Context::newModule(const std::string& name) {
