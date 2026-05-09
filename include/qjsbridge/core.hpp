@@ -197,6 +197,10 @@ public:
 
 // ── Value ─────────────────────────────────────────────────────────────────────
 
+// Forward-declared here so that Value::operator[] can call it; defined below
+// after the Value class closes.
+[[noreturn]] void throwJSException(JSContext* ctx);
+
 /// RAII owning wrapper for a JSValue.
 ///
 /// Constructing from (JSContext*, JSValue) **takes ownership** – the caller
@@ -376,7 +380,9 @@ public:
         return PropertyRef(this, name);
     }
     Value operator[](const char* name) const {
-        return Value(ctx_, JS_GetPropertyStr(ctx_, val_, name));
+        JSValue v = JS_GetPropertyStr(ctx_, val_, name);
+        if (JS_IsException(v)) { JS_FreeValue(ctx_, v); throwJSException(ctx_); }
+        return Value(ctx_, v);
     }
     PropertyRef operator[](const std::string& name) {
         return PropertyRef(this, name);
@@ -386,7 +392,9 @@ public:
         return PropertyRef(this, idx);
     }
     Value operator[](uint32_t idx) const {
-        return Value(ctx_, JS_GetPropertyUint32(ctx_, val_, idx));
+        JSValue v = JS_GetPropertyUint32(ctx_, val_, idx);
+        if (JS_IsException(v)) { JS_FreeValue(ctx_, v); throwJSException(ctx_); }
+        return Value(ctx_, v);
     }
 
     bool set(const char* name, Value v) {

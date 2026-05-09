@@ -199,6 +199,46 @@ static void test_quickjspp_style_module_loader() {
     assert(logged_urls == expected);
 }
 
+static void test_property_access_throws_on_getter_exception() {
+    Runtime rt;
+    Context ctx(rt);
+    // Define an object with a getter that throws.
+    ctx.eval("globalThis.badObj = {}; "
+             "Object.defineProperty(globalThis.badObj, 'boom', "
+             "  { get() { throw new Error('getter threw'); }, enumerable: true });");
+    Value obj = ctx.eval("badObj");
+
+    bool caught = false;
+    try {
+        Value v = obj["boom"];  // should throw JSException
+        (void)v;
+    } catch (const JSException& e) {
+        caught = true;
+        assert(std::string(e.what()).find("getter threw") != std::string::npos);
+    }
+    assert(caught);
+}
+
+static void test_array_index_access_throws_on_getter_exception() {
+    Runtime rt;
+    Context ctx(rt);
+    // Proxy whose get trap always throws.
+    ctx.eval("globalThis.badArr = new Proxy([], "
+             "  { get(t, k) { if (k === '0') throw new Error('index getter threw'); "
+             "                return Reflect.get(t, k); } });");
+    Value arr = ctx.eval("badArr");
+
+    bool caught = false;
+    try {
+        Value v = arr[uint32_t{0}];
+        (void)v;
+    } catch (const JSException& e) {
+        caught = true;
+        assert(std::string(e.what()).find("index getter threw") != std::string::npos);
+    }
+    assert(caught);
+}
+
 int main() {
     test_runtime_context_creation();
     test_eval_returns_value();
@@ -212,5 +252,7 @@ int main() {
     test_runtime_gc();
     test_default_module_loader_reports_missing_module();
     test_quickjspp_style_module_loader();
+    test_property_access_throws_on_getter_exception();
+    test_array_index_access_throws_on_getter_exception();
     return 0;
 }
