@@ -30,6 +30,8 @@ namespace qjsb {
 
 template <typename T>
 class ClassDef;
+template <typename T, typename Enable>
+struct Converter;
 
 // ── Exception types ───────────────────────────────────────────────────────────
 
@@ -215,6 +217,19 @@ public:
         bool is_index_{false};
         uint32_t index_{0};
 
+        template <typename F, typename = void>
+        struct has_call_operator_ : std::false_type {};
+
+        template <typename F>
+        struct has_call_operator_<F, std::void_t<decltype(&F::operator())>>
+            : std::true_type {};
+
+        template <typename F>
+        static constexpr bool is_callable_like_v =
+            std::is_function_v<std::remove_pointer_t<std::decay_t<F>>> ||
+            std::is_member_function_pointer_v<std::decay_t<F>> ||
+            has_call_operator_<std::decay_t<F>>::value;
+
         bool set_(Value v) {
             return is_index_ ? owner_->set(index_, std::move(v))
                              : owner_->set(name_, std::move(v));
@@ -248,6 +263,7 @@ public:
 
         template <typename Fn,
                   std::enable_if_t<
+                      is_callable_like_v<Fn> &&
                       !std::is_convertible_v<std::decay_t<Fn>, Value> &&
                       !std::is_same_v<std::decay_t<Fn>, JSValue> &&
                       !std::is_same_v<std::decay_t<Fn>, JSValueConst>,
@@ -258,6 +274,21 @@ public:
             } else {
                 owner_->setFunction(name_, std::forward<Fn>(fn));
             }
+            return *this;
+        }
+
+        template <typename U,
+                  std::enable_if_t<
+                      !is_callable_like_v<U> &&
+                      !std::is_convertible_v<std::decay_t<U>, Value> &&
+                      !std::is_same_v<std::decay_t<U>, JSValue> &&
+                      !std::is_same_v<std::decay_t<U>, JSValueConst>,
+                      int> = 0>
+        PropertyRef& operator=(U&& v) {
+            auto* ctx = owner_->ctx();
+            using V = std::decay_t<U>;
+            Value jsv(ctx, Converter<V, void>::to_js(ctx, std::forward<U>(v)));
+            set_(std::move(jsv));
             return *this;
         }
     };

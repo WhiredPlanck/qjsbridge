@@ -380,11 +380,16 @@ static void test_value_operator_assignment() {
     Runtime rt; Context ctx(rt);
 
     Value obj = ctx.newObject();
+    obj["count"] = 7;
     obj["answer"] = JS_NewInt32(ctx.get(), 42);
     obj["hello"] = [](std::string name) {
         return std::string("hello ") + name;
     };
     ctx.setGlobal("obj", std::move(obj));
+
+    int32_t count = 0;
+    JS_ToInt32(ctx.get(), &count, ctx.eval("obj.count").get());
+    assert(count == 7);
 
     int32_t answer = 0;
     JS_ToInt32(ctx.get(), &answer, ctx.eval("obj.answer").get());
