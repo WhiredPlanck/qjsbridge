@@ -289,4 +289,18 @@ inline Module& Module::bindFunctionRaw(const std::string& name,
     return bindFunction(name, std::move(fn), length);
 }
 
+template <typename Fn>
+inline bool Value::setFunction(const char* name, Fn&& fn, int length) {
+    if (!ctx_)
+        return false;
+    return set(name, makeFunction(ctx_, std::forward<Fn>(fn), "", length));
+}
+
+template <typename Fn>
+inline bool Value::setFunction(uint32_t idx, Fn&& fn, int length) {
+    if (!ctx_)
+        return false;
+    return set(idx, makeFunction(ctx_, std::forward<Fn>(fn), "", length));
+}
+
 } // namespace qjsb

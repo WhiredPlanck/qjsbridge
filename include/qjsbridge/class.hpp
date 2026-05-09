@@ -302,6 +302,7 @@ struct FieldSetter final : CallableBase {
 template <typename T>
 class ClassDef {
     JSContext*  ctx_;
+    Module*     module_{nullptr};
     std::string name_;
     JSValue     proto_;   // prototype object (owned by this ClassDef)
     JSValue     ctor_;    // constructor function (JS_UNDEFINED until .constructor<>())
@@ -313,11 +314,16 @@ class ClassDef {
 
 public:
     using RawMethodCallback = std::function<JSValue(JSContext*, T*, int, JSValueConst*)>;
-    ClassDef(JSContext* ctx, const char* name)
+    ClassDef(JSContext* ctx,
+             const char* name,
+             JSValueConst base_proto = JS_UNDEFINED)
         : ctx_(ctx), name_(name),
           proto_(JS_NewObject(ctx)),
           ctor_(JS_UNDEFINED) {
         detail::ClassRegistry<T>::ensure_registered(JS_GetRuntime(ctx_), name);
+        if (!JS_IsUndefined(base_proto) && !JS_IsNull(base_proto)) {
+            JS_SetPrototype(ctx_, proto_, base_proto);
+        }
         // Publish the prototype so that objects created with push_owned/etc.
         // pick it up via JS_GetClassProto.
         JS_SetClassProto(ctx_, detail::ClassRegistry<T>::class_id(),
@@ -326,6 +332,13 @@ public:
 
     explicit ClassDef(Context& ctx, const char* name)
         : ClassDef(ctx.get(), name) {}
+
+    explicit ClassDef(Module& module,
+                      const char* name,
+                      JSValueConst base_proto = JS_UNDEFINED)
+        : ClassDef(module.context(), name, base_proto) {
+        module_ = &module;
+    }
 
     ~ClassDef() noexcept {
         JS_FreeValue(ctx_, proto_);
@@ -475,13 +488,24 @@ public:
     // ── Finalise and register in global/module scope ──────────────────────────
 
     /// Installs the constructor as a global variable.
-    ClassDef& endClass(const std::string& global_name = "") {
+    ClassDef& endClassGlobal(const std::string& global_name = "") {
         ensure_ctor_();
         JSValue g = JS_GetGlobalObject(ctx_);
         const std::string& gn = global_name.empty() ? name_ : global_name;
         JS_SetPropertyStr(ctx_, g, gn.c_str(), JS_DupValue(ctx_, ctor_));
         JS_FreeValue(ctx_, g);
         return *this;
+    }
+
+    /// Exports the constructor on the module this class was started from.
+    /// Returns the module to support chained `beginClass` calls.
+    Module& endClass(const std::string& export_name = "") {
+        if (!module_)
+            throw Exception("endClass: class is not attached to a module");
+        ensure_ctor_();
+        const std::string& en = export_name.empty() ? name_ : export_name;
+        module_->exportValue(en, Value::dup(ctx_, ctor_));
+        return *module_;
     }
 
     /// Exports the constructor from a module so it can be imported from JS.
@@ -552,6 +576,26 @@ private:
         return make_fn_(cb, 1);
     }
 };
+
+template <typename T>
+inline ClassDef<T> Module::beginClass(const char* name) {
+    return ClassDef<T>(*this, name);
+}
+
+template <typename T, typename Base>
+inline ClassDef<T> Module::deriveClass(const char* name) {
+    static_assert(std::is_base_of_v<Base, T>,
+                  "deriveClass<T, Base>: Base must be a base class of T");
+    detail::ClassRegistry<Base>::ensure_registered(JS_GetRuntime(ctx_));
+    JSValue base_proto = JS_GetClassProto(ctx_, detail::ClassRegistry<Base>::class_id());
+    if (!JS_IsObject(base_proto)) {
+        JS_FreeValue(ctx_, base_proto);
+        throw Exception("deriveClass: base class must be registered first");
+    }
+    ClassDef<T> def(*this, name, base_proto);
+    JS_FreeValue(ctx_, base_proto);
+    return def;
+}
 
 // ── Converter specialisations for bound C++ classes ──────────────────────────
 //

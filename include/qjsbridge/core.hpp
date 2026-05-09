@@ -28,6 +28,9 @@
 
 namespace qjsb {
 
+template <typename T>
+class ClassDef;
+
 // ── Exception types ───────────────────────────────────────────────────────────
 
 /// Base for all qjsbridge exceptions.
@@ -206,6 +209,59 @@ class Value {
     }
 
 public:
+    class PropertyRef {
+        Value* owner_{nullptr};
+        std::string name_;
+        bool is_index_{false};
+        uint32_t index_{0};
+
+        bool set_(Value v) {
+            return is_index_ ? owner_->set(index_, std::move(v))
+                             : owner_->set(name_, std::move(v));
+        }
+
+    public:
+        PropertyRef(Value* owner, const char* name)
+            : owner_(owner), name_(name ? name : "") {}
+        PropertyRef(Value* owner, std::string name)
+            : owner_(owner), name_(std::move(name)) {}
+        PropertyRef(Value* owner, uint32_t index)
+            : owner_(owner), is_index_(true), index_(index) {}
+
+        operator Value() const {
+            return is_index_ ? (*owner_)[index_] : (*owner_)[name_];
+        }
+
+        PropertyRef& operator=(Value v) {
+            set_(std::move(v));
+            return *this;
+        }
+
+        PropertyRef& operator=(JSValueConst v) {
+            if (is_index_) {
+                owner_->set(index_, v);
+            } else {
+                owner_->set(name_, v);
+            }
+            return *this;
+        }
+
+        template <typename Fn,
+                  std::enable_if_t<
+                      !std::is_convertible_v<std::decay_t<Fn>, Value> &&
+                      !std::is_same_v<std::decay_t<Fn>, JSValue> &&
+                      !std::is_same_v<std::decay_t<Fn>, JSValueConst>,
+                      int> = 0>
+        PropertyRef& operator=(Fn&& fn) {
+            if (is_index_) {
+                owner_->setFunction(index_, std::forward<Fn>(fn));
+            } else {
+                owner_->setFunction(name_, std::forward<Fn>(fn));
+            }
+            return *this;
+        }
+    };
+
     // Takes ownership (no dup).
     Value(JSContext* ctx, JSValue val) noexcept : ctx_(ctx), val_(val) {}
 
@@ -284,10 +340,19 @@ public:
     }
 
     // ── Property access ───────────────────────────────────────────────────────
+    PropertyRef operator[](const char* name) {
+        return PropertyRef(this, name);
+    }
     Value operator[](const char* name) const {
         return Value(ctx_, JS_GetPropertyStr(ctx_, val_, name));
     }
+    PropertyRef operator[](const std::string& name) {
+        return PropertyRef(this, name);
+    }
     Value operator[](const std::string& name) const { return (*this)[name.c_str()]; }
+    PropertyRef operator[](uint32_t idx) {
+        return PropertyRef(this, idx);
+    }
     Value operator[](uint32_t idx) const {
         return Value(ctx_, JS_GetPropertyUint32(ctx_, val_, idx));
     }
@@ -296,9 +361,25 @@ public:
         return JS_SetPropertyStr(ctx_, val_, name, v.steal()) >= 0;
     }
     bool set(const std::string& name, Value v) { return set(name.c_str(), std::move(v)); }
+    bool set(const char* name, JSValueConst v) {
+        return JS_SetPropertyStr(ctx_, val_, name, JS_DupValue(ctx_, v)) >= 0;
+    }
+    bool set(const std::string& name, JSValueConst v) { return set(name.c_str(), v); }
     bool set(uint32_t idx, Value v) {
         return JS_SetPropertyUint32(ctx_, val_, idx, v.steal()) >= 0;
     }
+    bool set(uint32_t idx, JSValueConst v) {
+        return JS_SetPropertyUint32(ctx_, val_, idx, JS_DupValue(ctx_, v)) >= 0;
+    }
+
+    template <typename Fn>
+    bool setFunction(const char* name, Fn&& fn, int length = -1);
+    template <typename Fn>
+    bool setFunction(const std::string& name, Fn&& fn, int length = -1) {
+        return setFunction(name.c_str(), std::forward<Fn>(fn), length);
+    }
+    template <typename Fn>
+    bool setFunction(uint32_t idx, Fn&& fn, int length = -1);
 
     // ── Array length ──────────────────────────────────────────────────────────
     int64_t length() const {
@@ -558,6 +639,12 @@ public:
     Module& bindFunctionRaw(const std::string& name,
                             RawFunctionCallback fn,
                             int length = -1);
+
+    template <typename T>
+    ClassDef<T> beginClass(const char* name);
+
+    template <typename T, typename Base>
+    ClassDef<T> deriveClass(const char* name);
 };
 
 inline Module Context::newModule(const std::string& name) {

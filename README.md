@@ -209,14 +209,15 @@ struct Vec2 {
     static Vec2 zero() { return {0, 0}; }
 };
 
-qjsb::ClassDef<Vec2>(ctx, "Vec2")
+auto geom = ctx.newModule("geom");
+geom.beginClass<Vec2>("Vec2")
     .constructor<double, double>()   // new Vec2(x, y)
     .field("x", &Vec2::x)            // direct field access (get + set)
     .field("y", &Vec2::y)
     .property("length", &Vec2::length)      // getter-only overload
     .method("add",  &Vec2::add)
     .staticMethod("zero", Vec2::zero)
-    .endClass();                     // registers Vec2 as a global
+    .endClass();                     // export { Vec2 } from "geom"
 
 // From JavaScript:
 //   var v = new Vec2(3, 4);
@@ -227,7 +228,8 @@ qjsb::ClassDef<Vec2>(ctx, "Vec2")
 
 ```cpp
 // Manual overload dispatch on instance methods:
-qjsb::ClassDef<MyClass>(ctx, "MyClass")
+ctx.newModule("app")
+    .beginClass<MyClass>("MyClass")
     .constructor<>()
     .method("set", [](JSContext* ctx, MyClass* self, int argc, JSValueConst* argv) -> JSValue {
         if (argc == 1 && JS_IsNumber(argv[0])) { /* self->set(int) */ }
@@ -239,12 +241,23 @@ qjsb::ClassDef<MyClass>(ctx, "MyClass")
 ```
 
 ```cpp
-// Export class constructor from a module instead of global:
 auto geom = ctx.newModule("geom");
-qjsb::ClassDef<Vec2>(ctx, "Vec2")
+geom.beginClass<Vec2>("Vec2")
     .constructor<double, double>()
     .property("length", &Vec2::length)
-    .endClass(geom);                 // export { Vec2 } from "geom"
+    .endClass();                     // export { Vec2 } from "geom"
+// Chain another class:
+geom.beginClass<Color>("Color")
+    .constructor<int, int, int>()
+    .endClass();
+
+// Derived registration (Base must already be registered):
+geom.beginClass<Base>("Base")
+    .constructor<>()
+    .endClass()
+    .deriveClass<Derived, Base>("Derived")
+    .constructor<>()
+    .endClass();
 ```
 
 ### Ownership semantics
@@ -323,7 +336,7 @@ Owning RAII wrapper for `JSValue`.
 | `Value::dup(ctx, v)`            | Create a reference-counted copy           |
 | `isUndefined()`, `isNull()`, `isBool()`, `isNumber()`, `isString()`, `isObject()`, `isArray()`, `isFunction()` | Type predicates |
 | `toString()`                    | JS toString conversion                    |
-| `operator[](name)` / `operator[](idx)` | Property/index access              |
+| `operator[](name)` / `operator[](idx)` | Property/index access; non-const `Value` also supports assignment (`obj["x"] = v`, `obj["fn"] = [](...) { ... }`) |
 | `set(name/idx, value)`          | Property/index write                      |
 | `length()`                      | Array/string length                       |
 | `call(...)` / `callAsConstructor(...)` | Invoke as function/constructor      |
@@ -338,8 +351,9 @@ Owning RAII wrapper for `JSValue`.
 | `property(name, getter)`            | Getter-only property                       |
 | `property(name, getter, setter)`    | Read-write property                        |
 | `staticMethod(name, fn)`            | Static method on the constructor          |
-| `endClass(global_name?)`            | Publish constructor as global variable    |
+| `endClass(export_name?)`            | Export constructor from the owning module and return `Module&` for chaining |
 | `endClass(module, export_name?)`    | Export constructor from a module          |
+| `endClassGlobal(global_name?)`      | Publish constructor as global variable (compatibility path) |
 | `constructorValue()`                | Returns constructor `Value` for manual placement |
 
 ### `qjsb::Module`
@@ -348,6 +362,8 @@ Owning RAII wrapper for `JSValue`.
 |----------------------------------------|------------------------------------------|
 | `bindFunction(name, fn, length?)`      | Export callable from module (typed callable or raw callback `ctx,this_val,argc,argv`) |
 | `exportValue(name, value)`             | Export existing JS value                 |
+| `beginClass<T>(name)`                  | Start fluent module-scoped class registration |
+| `deriveClass<T, Base>(name)`           | Start module-scoped derived-class registration (`Base` must already be registered) |
 | `get()`                                | Raw `JSModuleDef*`                       |
 
 ### `qjsb::ModuleLoader`

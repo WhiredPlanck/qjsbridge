@@ -29,7 +29,7 @@ static void test_point_binding() {
         .method("length", &Point::length)
         .method("scale",  &Point::scale)
         .method("str",    &Point::str)
-        .endClass();
+        .endClassGlobal();
 
     // Construction
     Value p = ctx.eval("new Point(3, 4)");
@@ -83,7 +83,7 @@ static void test_counter_static() {
         .method("add",       &Counter::add)
         .method("value",     &Counter::value)
         .staticMethod("zero", Counter::zero)
-        .endClass();
+        .endClassGlobal();
 
     Value v = ctx.eval(R"(
         var c = new Counter(10);
@@ -117,7 +117,7 @@ static void test_readonly_property_overload() {
         .field("radius",    &Circle::radius)
         .property("area",      &Circle::area)
         .property("perimeter", &Circle::perimeter)
-        .endClass();
+        .endClassGlobal();
 
     Value area = ctx.eval("new Circle(1).area");
     double ad = 0; JS_ToFloat64(ctx.get(), &ad, area.get());
@@ -145,7 +145,7 @@ static void test_lambda_method() {
         .method("append", [](StringHolder* self, std::string s) {
             self->data += s;
         })
-        .endClass();
+        .endClassGlobal();
 
     Value v = ctx.eval("new StringHolder('hello').upper()");
     assert(v.toString() == "HELLO");
@@ -166,7 +166,7 @@ static void test_push_owned() {
         .field("x", &Point::x)
         .field("y", &Point::y)
         .method("length", &Point::length)
-        .endClass();
+        .endClassGlobal();
 
     // Create from C++ and push to JS (JS takes ownership)
     auto* p = new Point(5.0, 12.0);
@@ -184,7 +184,7 @@ static void test_push_borrowed() {
         .constructor<double, double>()
         .field("x", &Point::x)
         .field("y", &Point::y)
-        .endClass();
+        .endClassGlobal();
 
     Point p(3.0, 4.0);
     ctx.setGlobal("bp", pushBorrowed(ctx, &p));
@@ -202,7 +202,7 @@ static void test_shared_ptr() {
         .constructor<int>()
         .method("increment", &Counter::increment)
         .method("value",     &Counter::value)
-        .endClass();
+        .endClassGlobal();
 
     auto sp = std::make_shared<Counter>(7);
     ctx.setGlobal("sc", pushShared(ctx, sp));
@@ -236,7 +236,7 @@ static void test_property() {
         .field("h", &Rectangle::h)
         .property("w", &Rectangle::getW, &Rectangle::setW)
         .property("area", &Rectangle::getArea)
-        .endClass();
+        .endClassGlobal();
 
     ctx.eval("var r = new Rectangle(3, 4);");
     Value w = ctx.eval("r.w");
@@ -258,12 +258,12 @@ static void test_multiple_classes() {
         .constructor<double, double>()
         .field("x", &Point::x)
         .field("y", &Point::y)
-        .endClass();
+        .endClassGlobal();
 
     ClassDef<Counter>(ctx, "Counter")
         .constructor<int>()
         .method("value", &Counter::value)
-        .endClass();
+        .endClassGlobal();
 
     ctx.eval("var p = new Point(1, 2); var c = new Counter(10);");
     Value cx = ctx.eval("p.x");
@@ -322,7 +322,7 @@ static void test_raw_method_manual_overload_dispatch() {
             return JS_ThrowTypeError(js, "No matching overload for OverloadDemo.set()");
         })
         .method("get", &OverloadDemo::get)
-        .endClass();
+        .endClassGlobal();
 
     Value n = ctx.eval("var o = new OverloadDemo(); o.set(12);");
     int32_t ni = 0; JS_ToInt32(ctx.get(), &ni, n.get());
@@ -334,6 +334,62 @@ static void test_raw_method_manual_overload_dispatch() {
     Value v = ctx.eval("o.get()");
     int32_t vi = 0; JS_ToInt32(ctx.get(), &vi, v.get());
     assert(vi == 4);
+}
+
+struct Animal {
+    int age{0};
+    explicit Animal(int a) : age(a) {}
+};
+
+struct Dog : Animal {
+    std::string name;
+    Dog(int a, std::string n) : Animal(a), name(std::move(n)) {}
+    std::string bark() const { return "woof:" + name; }
+};
+
+static void test_module_begin_derive_and_chain() {
+    Runtime rt; Context ctx(rt);
+    auto module = ctx.newModule("zoo");
+
+    module.beginClass<Animal>("Animal")
+        .constructor<int>()
+        .field("age", &Animal::age)
+        .endClass()
+        .deriveClass<Dog, Animal>("Dog")
+        .constructor<int, std::string>()
+        .field("name", &Dog::name)
+        .method("bark", &Dog::bark)
+        .endClass();
+
+    ctx.evalModule(R"(
+        import { Animal, Dog } from "zoo";
+        const d = new Dog(3, "fido");
+        globalThis.dogAge = d.age;
+        globalThis.dogBark = d.bark();
+        globalThis.dogIsAnimal = d instanceof Animal;
+    )", "zoo_test.mjs");
+
+    int32_t age = 0;
+    JS_ToInt32(ctx.get(), &age, ctx.eval("dogAge").get());
+    assert(age == 3);
+    assert(ctx.eval("dogBark").toString() == "woof:fido");
+    assert(JS_ToBool(ctx.get(), ctx.eval("dogIsAnimal").get()) == 1);
+}
+
+static void test_value_operator_assignment() {
+    Runtime rt; Context ctx(rt);
+
+    Value obj = ctx.newObject();
+    obj["answer"] = JS_NewInt32(ctx.get(), 42);
+    obj["hello"] = [](std::string name) {
+        return std::string("hello ") + name;
+    };
+    ctx.setGlobal("obj", std::move(obj));
+
+    int32_t answer = 0;
+    JS_ToInt32(ctx.get(), &answer, ctx.eval("obj.answer").get());
+    assert(answer == 42);
+    assert(ctx.eval("obj.hello('bridge')").toString() == "hello bridge");
 }
 
 int main() {
@@ -348,5 +404,7 @@ int main() {
     test_multiple_classes();
     test_module_class_export();
     test_raw_method_manual_overload_dispatch();
+    test_module_begin_derive_and_chain();
+    test_value_operator_assignment();
     return 0;
 }
