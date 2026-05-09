@@ -329,6 +329,21 @@ static void test_value_invoke_as_constructor() {
     assert(y == 20);
 }
 
+static void test_value_invoke_throws_on_js_exception() {
+    Runtime rt; Context ctx(rt);
+    ctx.bindFunction("boom", []() -> int { throw std::runtime_error("boom!"); return 0; });
+
+    Value fn = ctx.eval("boom");
+    bool caught = false;
+    try {
+        fn.invoke<int>();
+    } catch (const JSException& e) {
+        caught = true;
+        assert(std::string(e.what()).find("boom!") != std::string::npos);
+    }
+    assert(caught);
+}
+
 int main() {
     test_free_function();
     test_string_function();
@@ -351,5 +366,6 @@ int main() {
     test_value_invoke_void();
     test_value_invoke_method();
     test_value_invoke_as_constructor();
+    test_value_invoke_throws_on_js_exception();
     return 0;
 }

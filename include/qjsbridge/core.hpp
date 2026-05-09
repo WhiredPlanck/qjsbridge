@@ -434,9 +434,10 @@ public:
 
     // ── Calling (high-level: auto-convert C++ args / return value) ────────────
     /// Call this value as a function, automatically converting each C++ argument
-    /// via `Converter<T>::to_js`.  The return type defaults to `Value`; supply an
-    /// explicit template argument (e.g. `invoke<int>(...)`) to receive an already-
-    /// converted C++ value.  Pass `Ret = void` to discard the result.
+    /// via Converter<T>::to_js.  The return type defaults to Value; supply an
+    /// explicit template argument (e.g. invoke<int>(...)) to receive an already-
+    /// converted C++ value.  Pass Ret = void to discard the result.
+    /// Throws JSException if the JS call results in an exception.
     template <typename Ret = Value, typename... Args>
     Ret invoke(Args&&... args) const;
 

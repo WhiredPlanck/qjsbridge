@@ -335,6 +335,11 @@ inline Ret Value::invokeMethod(JSValueConst this_val, Args&&... args) const {
                           argv.data());
     for (auto& v : argv) JS_FreeValue(ctx_, v);
 
+    if (JS_IsException(raw)) {
+        JS_FreeValue(ctx_, raw);
+        throwJSException(ctx_);
+    }
+
     if constexpr (std::is_void_v<Ret>) {
         JS_FreeValue(ctx_, raw);
     } else if constexpr (std::is_same_v<std::decay_t<Ret>, Value>) {
@@ -357,6 +362,11 @@ inline Ret Value::invokeAsConstructor(Args&&... args) const {
                                      static_cast<int>(argv.size()),
                                      argv.data());
     for (auto& v : argv) JS_FreeValue(ctx_, v);
+
+    if (JS_IsException(raw)) {
+        JS_FreeValue(ctx_, raw);
+        throwJSException(ctx_);
+    }
 
     if constexpr (std::is_void_v<Ret>) {
         JS_FreeValue(ctx_, raw);
