@@ -385,6 +385,12 @@ static void test_value_operator_assignment() {
     obj["hello"] = [](std::string name) {
         return std::string("hello ") + name;
     };
+
+    Value count_value = obj["count"];
+    int32_t count_from_cpp = 0;
+    JS_ToInt32(ctx.get(), &count_from_cpp, count_value.get());
+    assert(count_from_cpp == 7);
+
     ctx.setGlobal("obj", std::move(obj));
 
     int32_t count = 0;

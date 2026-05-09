@@ -244,7 +244,8 @@ public:
             : owner_(owner), is_index_(true), index_(index) {}
 
         operator Value() const {
-            return is_index_ ? (*owner_)[index_] : (*owner_)[name_];
+            const Value* cowner = owner_;
+            return is_index_ ? (*cowner)[index_] : (*cowner)[name_];
         }
 
         PropertyRef& operator=(Value v) {
