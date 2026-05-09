@@ -421,7 +421,7 @@ public:
         return n;
     }
 
-    // ── Calling ───────────────────────────────────────────────────────────────
+    // ── Calling (low-level: raw JSValue array) ────────────────────────────────
     Value call(JSValueConst this_val, int argc = 0, JSValue* argv = nullptr) const {
         return Value(ctx_, JS_Call(ctx_, val_, this_val, argc, argv));
     }
@@ -431,6 +431,22 @@ public:
     Value callAsConstructor(int argc = 0, JSValue* argv = nullptr) const {
         return Value(ctx_, JS_CallConstructor(ctx_, val_, argc, argv));
     }
+
+    // ── Calling (high-level: auto-convert C++ args / return value) ────────────
+    /// Call this value as a function, automatically converting each C++ argument
+    /// via `Converter<T>::to_js`.  The return type defaults to `Value`; supply an
+    /// explicit template argument (e.g. `invoke<int>(...)`) to receive an already-
+    /// converted C++ value.  Pass `Ret = void` to discard the result.
+    template <typename Ret = Value, typename... Args>
+    Ret invoke(Args&&... args) const;
+
+    /// Same as `invoke`, but lets you supply an explicit `this` object.
+    template <typename Ret = Value, typename... Args>
+    Ret invokeMethod(JSValueConst this_val, Args&&... args) const;
+
+    /// Call this value as a constructor (`new`), automatically converting C++ args.
+    template <typename Ret = Value, typename... Args>
+    Ret invokeAsConstructor(Args&&... args) const;
 };
 
 // ── Pending-exception helpers ─────────────────────────────────────────────────

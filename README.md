@@ -339,7 +339,10 @@ Owning RAII wrapper for `JSValue`.
 | `operator[](name)` / `operator[](idx)` | Property/index access; non-const `Value` also supports assignment (`obj["x"] = v`, `obj["fn"] = [](...) { ... }`) |
 | `set(name/idx, value)`          | Property/index write                      |
 | `length()`                      | Array/string length                       |
-| `call(...)` / `callAsConstructor(...)` | Invoke as function/constructor      |
+| `call(...)` / `callAsConstructor(...)` | Invoke as function/constructor (low-level: pass raw `JSValue*` array) |
+| `invoke<Ret=Value>(args...)` | Call with auto-converted C++ args; result type defaults to `Value` or can be an explicit C++ type (e.g. `invoke<int>(1, 2)`) |
+| `invokeMethod<Ret=Value>(this_val, args...)` | Same as `invoke` but with an explicit `this` object |
+| `invokeAsConstructor<Ret=Value>(args...)` | Call as constructor (`new`) with auto-converted C++ args |
 
 ### `qjsb::ClassDef<T>`
 

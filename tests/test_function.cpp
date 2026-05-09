@@ -250,6 +250,85 @@ static void test_raw_function_manual_overload_dispatch() {
     assert(s.toString() == "hello qjs");
 }
 
+// ── Value::invoke / invokeMethod / invokeAsConstructor ────────────────────────
+
+static void test_value_invoke_typed_return() {
+    Runtime rt; Context ctx(rt);
+    ctx.bindFunction("add", [](int a, int b) { return a + b; });
+    ctx.bindFunction("greet", [](std::string name) { return "hi " + name; });
+
+    Value add   = ctx.eval("add");
+    Value greet = ctx.eval("greet");
+
+    // Explicit typed return – no manual JS_ToInt32 needed
+    int sum = add.invoke<int>(3, 4);
+    assert(sum == 7);
+
+    std::string msg = greet.invoke<std::string>(std::string("world"));
+    assert(msg == "hi world");
+}
+
+static void test_value_invoke_default_return() {
+    Runtime rt; Context ctx(rt);
+    ctx.bindFunction("mul", [](int a, int b) { return a * b; });
+
+    Value mul = ctx.eval("mul");
+
+    // Default Ret = Value
+    Value v = mul.invoke(6, 7);
+    int32_t n = 0;
+    JS_ToInt32(ctx.get(), &n, v.get());
+    assert(n == 42);
+}
+
+static void test_value_invoke_no_args() {
+    Runtime rt; Context ctx(rt);
+    ctx.bindFunction("getAnswer", []() { return 42; });
+
+    Value fn = ctx.eval("getAnswer");
+    int answer = fn.invoke<int>();
+    assert(answer == 42);
+}
+
+static void test_value_invoke_void() {
+    Runtime rt; Context ctx(rt);
+    bool called = false;
+    ctx.bindFunction("sideEffect", [&called]() { called = true; });
+
+    Value fn = ctx.eval("sideEffect");
+    fn.invoke<void>();
+    assert(called);
+}
+
+static void test_value_invoke_method() {
+    Runtime rt; Context ctx(rt);
+
+    Value obj = ctx.eval("({ count: 0, inc(n) { this.count += n; return this.count; } })");
+    Value inc = static_cast<const Value&>(obj)["inc"];
+
+    int v1 = inc.invokeMethod<int>(obj.get(), 5);
+    assert(v1 == 5);
+
+    int v2 = inc.invokeMethod<int>(obj.get(), 3);
+    assert(v2 == 8);
+}
+
+static void test_value_invoke_as_constructor() {
+    Runtime rt; Context ctx(rt);
+    ctx.eval("globalThis.Point = class Point { constructor(x, y) { this.x = x; this.y = y; } }");
+
+    Value PointClass = ctx.eval("Point");
+    Value pt = PointClass.invokeAsConstructor(10, 20);
+    assert(pt.isObject());
+
+    ctx.setGlobal("pt", std::move(pt));
+    int32_t x = 0, y = 0;
+    JS_ToInt32(ctx.get(), &x, ctx.eval("pt.x").get());
+    JS_ToInt32(ctx.get(), &y, ctx.eval("pt.y").get());
+    assert(x == 10);
+    assert(y == 20);
+}
+
 int main() {
     test_free_function();
     test_string_function();
@@ -266,5 +345,11 @@ int main() {
     test_module_function_binding();
     test_module_raw_function_manual_overload_dispatch();
     test_raw_function_manual_overload_dispatch();
+    test_value_invoke_typed_return();
+    test_value_invoke_default_return();
+    test_value_invoke_no_args();
+    test_value_invoke_void();
+    test_value_invoke_method();
+    test_value_invoke_as_constructor();
     return 0;
 }

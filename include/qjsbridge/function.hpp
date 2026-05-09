@@ -303,4 +303,69 @@ inline bool Value::setFunction(uint32_t idx, Fn&& fn, int length) {
     return set(idx, makeFunction(ctx_, std::forward<Fn>(fn), "", length));
 }
 
+// ── detail: convert a C++ argument pack into an owned JSValue vector ─────────
+
+namespace detail {
+
+/// Convert each C++ argument to JSValue and collect them into a vector.
+/// On exception during conversion the already-converted values are freed
+/// before re-throwing, so the caller never leaks them.
+template <typename... Args>
+inline std::vector<JSValue> build_argv_(JSContext* ctx, Args&&... args) {
+    std::vector<JSValue> argv;
+    argv.reserve(sizeof...(Args));
+    try {
+        (argv.push_back(Converter<std::decay_t<Args>>::to_js(ctx, std::forward<Args>(args))), ...);
+    } catch (...) {
+        for (auto& v : argv) JS_FreeValue(ctx, v);
+        throw;
+    }
+    return argv;
+}
+
+} // namespace detail
+
+// ── Value::invoke* definitions ────────────────────────────────────────────────
+
+template <typename Ret, typename... Args>
+inline Ret Value::invokeMethod(JSValueConst this_val, Args&&... args) const {
+    auto argv = detail::build_argv_(ctx_, std::forward<Args>(args)...);
+    JSValue raw = JS_Call(ctx_, val_, this_val,
+                          static_cast<int>(argv.size()),
+                          argv.data());
+    for (auto& v : argv) JS_FreeValue(ctx_, v);
+
+    if constexpr (std::is_void_v<Ret>) {
+        JS_FreeValue(ctx_, raw);
+    } else if constexpr (std::is_same_v<std::decay_t<Ret>, Value>) {
+        return Value(ctx_, raw);
+    } else {
+        Value result(ctx_, raw);
+        return Converter<std::decay_t<Ret>>::from_js(ctx_, result.get());
+    }
+}
+
+template <typename Ret, typename... Args>
+inline Ret Value::invoke(Args&&... args) const {
+    return invokeMethod<Ret>(JS_UNDEFINED, std::forward<Args>(args)...);
+}
+
+template <typename Ret, typename... Args>
+inline Ret Value::invokeAsConstructor(Args&&... args) const {
+    auto argv = detail::build_argv_(ctx_, std::forward<Args>(args)...);
+    JSValue raw = JS_CallConstructor(ctx_, val_,
+                                     static_cast<int>(argv.size()),
+                                     argv.data());
+    for (auto& v : argv) JS_FreeValue(ctx_, v);
+
+    if constexpr (std::is_void_v<Ret>) {
+        JS_FreeValue(ctx_, raw);
+    } else if constexpr (std::is_same_v<std::decay_t<Ret>, Value>) {
+        return Value(ctx_, raw);
+    } else {
+        Value result(ctx_, raw);
+        return Converter<std::decay_t<Ret>>::from_js(ctx_, result.get());
+    }
+}
+
 } // namespace qjsb
