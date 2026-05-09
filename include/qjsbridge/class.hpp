@@ -347,6 +347,31 @@ public:
 
     ClassDef(const ClassDef&)            = delete;
     ClassDef& operator=(const ClassDef&) = delete;
+    ClassDef(ClassDef&& o) noexcept
+        : ctx_(o.ctx_),
+          module_(o.module_),
+          name_(std::move(o.name_)),
+          proto_(o.proto_),
+          ctor_(o.ctor_) {
+        o.module_ = nullptr;
+        o.proto_ = JS_UNDEFINED;
+        o.ctor_ = JS_UNDEFINED;
+    }
+    ClassDef& operator=(ClassDef&& o) noexcept {
+        if (this != &o) {
+            JS_FreeValue(ctx_, proto_);
+            JS_FreeValue(ctx_, ctor_);
+            ctx_ = o.ctx_;
+            module_ = o.module_;
+            name_ = std::move(o.name_);
+            proto_ = o.proto_;
+            ctor_ = o.ctor_;
+            o.module_ = nullptr;
+            o.proto_ = JS_UNDEFINED;
+            o.ctor_ = JS_UNDEFINED;
+        }
+        return *this;
+    }
 
     // ── Constructor ───────────────────────────────────────────────────────────
 
